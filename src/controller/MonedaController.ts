@@ -5,6 +5,7 @@ import { MonedaRequestDTO } from '../repositories/dtos/MonedaDTO';
 import { SwaggerResponseBuilder } from '../core/common/SwaggerResponseBuilder';
 import { ValidationError, NotFoundError, ConflictError } from '../domain/MonedaBL';
 import { ALLOWED_HEADERS_VALUES } from '../core/utils/Constans';
+import { PaginationParams } from '../domain/models/MonedaDomain';
 
 export class MonedaController implements IMonedaController {
 
@@ -76,15 +77,17 @@ export class MonedaController implements IMonedaController {
   }
 
   /**
-   * GET /v1/pos/monedas - Listar monedas
+   * GET /v1/pos/monedas - Listar monedas con paginación
+   * Parámetros requeridos: pageNumber, pageSize
    */
-  async listAllMonedas(
+  async listMonedas(
+    pagination: PaginationParams,
     messageUuid: string,
     requestAppId: string
   ): Promise<APIGatewayProxyResult> {
     try {
-      // Llamar a la lógica de negocio
-      const data = await this.monedaBL.listAllMonedas();
+      // Llamar a la lógica de negocio con paginación
+      const data = await this.monedaBL.listMonedasPaginated(pagination);
 
       // Construir respuesta exitosa (200 OK)
       const response = SwaggerResponseBuilder.buildSuccessResponse(

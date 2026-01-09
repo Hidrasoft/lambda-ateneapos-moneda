@@ -1,7 +1,8 @@
-import { IMonedaRepository } from './IMonedaRepository';
+import { IMonedaRepository, PaginatedResult } from './IMonedaRepository';
 import { MonedaRequestDTO, MonedaDTO } from './dtos/MonedaDTO';
 import { mysqlClient } from '../core/utils/DatabaseManager';
 import { QUERIES } from '../core/utils/Constans';
+import { PaginationParams } from '../domain/models/MonedaDomain';
 
 export class MonedaRepository implements IMonedaRepository {
 
@@ -39,11 +40,34 @@ export class MonedaRepository implements IMonedaRepository {
   }
 
   /**
-   * Listar todas las monedas
+   * Listar todas las monedas (sin paginación)
    */
   async listAllMonedas(): Promise<MonedaDTO[]> {
     const result = await mysqlClient.query(QUERIES.LIST_ALL_MONEDAS);
     return result.rows as MonedaDTO[];
+  }
+
+  /**
+   * Listar monedas con paginación
+   */
+  async listMonedasPaginated(pagination: PaginationParams): Promise<PaginatedResult<MonedaDTO>> {
+    // Calcular offset: (pageNumber - 1) * pageSize
+    const offset = (pagination.pageNumber - 1) * pagination.pageSize;
+
+    // Obtener el total de registros
+    const countResult = await mysqlClient.query(QUERIES.COUNT_MONEDAS);
+    const totalRecords = parseInt(countResult.rows[0]?.total || '0');
+
+    // Obtener los registros paginados
+    const dataResult = await mysqlClient.query(
+      QUERIES.LIST_MONEDAS_PAGINATED,
+      [pagination.pageSize, offset]
+    );
+
+    return {
+      data: dataResult.rows as MonedaDTO[],
+      totalRecords
+    };
   }
 
   /**

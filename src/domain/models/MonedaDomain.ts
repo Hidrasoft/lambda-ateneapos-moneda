@@ -10,15 +10,30 @@ export interface Moneda {
   activo: boolean;
 }
 
+// Parámetros de paginación (requeridos según contrato Swagger)
+export interface PaginationParams {
+  pageNumber: number;  // Número de página (inicia en 1)
+  pageSize: number;    // Tamaño de página (1-500)
+}
+
+// Respuesta de paginación
+export interface PaginationResponse {
+  pageNumber: number;
+  pageSize: number;
+  totalRecords: number;
+  totalPages: number;
+}
+
 // Respuesta para operación individual (GET, PUT, DELETE)
 export type MonedaResponse = SwaggerSuccessResponse<Moneda>;
 
 // Respuesta para creación (POST) - 201
 export type MonedaCreatedResponse = SwaggerSuccessResponse<Moneda>;
 
-// Respuesta para listado (GET /monedas)
+// Respuesta para listado (GET /monedas) con paginación
 export interface MonedaListData {
   monedas: Moneda[];
+  pagination: PaginationResponse;
 }
 
 export type MonedaListResponse = SwaggerSuccessResponse<MonedaListData>;

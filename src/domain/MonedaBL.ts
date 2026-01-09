@@ -1,7 +1,7 @@
 import { IMonedaBL } from './IMonedaBL';
 import { IMonedaRepository } from '../repositories/IMonedaRepository';
 import { MonedaRequestDTO } from '../repositories/dtos/MonedaDTO';
-import { Moneda, MonedaListData } from './models/MonedaDomain';
+import { Moneda, MonedaListData, PaginationParams } from './models/MonedaDomain';
 import { MonedaMapper } from './mappers/MonedaMapper';
 
 // Excepciones personalizadas
@@ -71,7 +71,7 @@ export class MonedaBL implements IMonedaBL {
   }
 
   /**
-   * Listar todas las monedas
+   * Listar todas las monedas (sin paginación)
    */
   async listAllMonedas(): Promise<MonedaListData> {
     // Obtener todas las monedas
@@ -81,8 +81,68 @@ export class MonedaBL implements IMonedaBL {
     const monedas = MonedaMapper.toDomainList(monedasDTO);
 
     return {
-      monedas
+      monedas,
+      pagination: {
+        pageNumber: 1,
+        pageSize: monedas.length,
+        totalRecords: monedas.length,
+        totalPages: 1
+      }
     };
+  }
+
+  /**
+   * Listar monedas con paginación
+   */
+  async listMonedasPaginated(pagination: PaginationParams): Promise<MonedaListData> {
+    // Validar parámetros de paginación
+    this.validatePaginationParams(pagination);
+
+    // Obtener monedas paginadas
+    const result = await this.monedaRepository.listMonedasPaginated(pagination);
+
+    // Transformar a modelos de dominio
+    const monedas = MonedaMapper.toDomainList(result.data);
+
+    // Calcular total de páginas
+    const totalPages = Math.ceil(result.totalRecords / pagination.pageSize);
+
+    return {
+      monedas,
+      pagination: {
+        pageNumber: pagination.pageNumber,
+        pageSize: pagination.pageSize,
+        totalRecords: result.totalRecords,
+        totalPages
+      }
+    };
+  }
+
+  /**
+   * Validar parámetros de paginación
+   */
+  private validatePaginationParams(pagination: PaginationParams): void {
+    // Validar pageNumber
+    if (pagination.pageNumber === undefined || pagination.pageNumber === null) {
+      throw new ValidationError('El parámetro pageNumber es requerido');
+    }
+
+    if (!Number.isInteger(pagination.pageNumber) || pagination.pageNumber < 1) {
+      throw new ValidationError('El parámetro pageNumber debe ser un entero mayor o igual a 1');
+    }
+
+    // Validar pageSize
+    if (pagination.pageSize === undefined || pagination.pageSize === null) {
+      throw new ValidationError('El parámetro pageSize es requerido');
+    }
+
+    if (!Number.isInteger(pagination.pageSize) || pagination.pageSize < 1) {
+      throw new ValidationError('El parámetro pageSize debe ser un entero mayor o igual a 1');
+    }
+
+    if (pagination.pageSize > 500) {
+      throw new ValidationError('El parámetro pageSize no puede ser mayor a 500');
+    }
   }
 
   /**

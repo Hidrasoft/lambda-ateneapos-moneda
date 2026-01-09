@@ -1,5 +1,6 @@
 import { APIGatewayProxyResult } from 'aws-lambda';
 import { MonedaRequestDTO } from '../repositories/dtos/MonedaDTO';
+import { PaginationParams } from '../domain/models/MonedaDomain';
 
 export interface IMonedaController {
   createMoneda(
@@ -14,7 +15,8 @@ export interface IMonedaController {
     requestAppId: string
   ): Promise<APIGatewayProxyResult>;
 
-  listAllMonedas(
+  listMonedas(
+    pagination: PaginationParams,
     messageUuid: string,
     requestAppId: string
   ): Promise<APIGatewayProxyResult>;

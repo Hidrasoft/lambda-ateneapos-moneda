@@ -100,6 +100,18 @@ export enum QUERIES {
         ORDER BY moneda_id
     `,
 
+    LIST_MONEDAS_PAGINATED = `
+        SELECT moneda_id, codigo_iso, nombre, simbolo, decimales, activo
+        FROM moneda
+        ORDER BY moneda_id
+        LIMIT $1 OFFSET $2
+    `,
+
+    COUNT_MONEDAS = `
+        SELECT COUNT(*) as total
+        FROM moneda
+    `,
+
     UPDATE_MONEDA = `
         UPDATE moneda
         SET codigo_iso = $1,
