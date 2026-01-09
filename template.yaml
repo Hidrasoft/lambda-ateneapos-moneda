@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda para gestión de monedas - Sistema POS Atenea
+
+Resources:
+  MonedasFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: lambda-ateneapos-moneda
+      CodeUri: src/
+      Description: 'Lambda para API REST de monedas - Sistema POS Atenea'
+      MemorySize: 256
+      Timeout: 10
+      Handler: app.lambdaHandler
+      Runtime: nodejs20.x
+      Architectures:
+        - arm64
+      EphemeralStorage:
+        Size: 512
+      Environment:
+        Variables:
+          PG_HOST: db-atenea-pos.ctiw48myq04p.us-east-1.rds.amazonaws.com
+          PG_USER: postgres
+          PG_PASSWORD: KratosMilo123**
+          PG_DATABASE: ateneapos
+          PG_PORT: 5432
+          NODE_ENVIRONMENT: DEV
+      EventInvokeConfig:
+        MaximumEventAgeInSeconds: 21600
+        MaximumRetryAttempts: 2
+      PackageType: Zip
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+            - Effect: Allow
+              Action:
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource:
+                - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/lambda-ateneapos-moneda:*'
+      SnapStart:
+        ApplyOn: None
+      Events:
+        CreateMoneda:
+          Type: Api
+          Properties:
+            Path: /v1/pos/monedas
+            Method: POST
+        ListMonedas:
+          Type: Api
+          Properties:
+            Path: /v1/pos/monedas
+            Method: GET
+        GetMoneda:
+          Type: Api
+          Properties:
+            Path: /v1/pos/monedas/{monedaId}
+            Method: GET
+        UpdateMoneda:
+          Type: Api
+          Properties:
+            Path: /v1/pos/monedas/{monedaId}
+            Method: PUT
+        DeleteMoneda:
+          Type: Api
+          Properties:
+            Path: /v1/pos/monedas/{monedaId}
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        EntryPoints:
+          - app.ts
+
+Outputs:
+  ApiUrl:
+    Description: URL del API Gateway para Monedas
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/'
+  FunctionArn:
+    Description: ARN de la función Lambda de Monedas
+    Value: !GetAtt MonedasFunction.Arn
+  FunctionName:
+    Description: Nombre de la función Lambda
+    Value: !Ref MonedasFunction

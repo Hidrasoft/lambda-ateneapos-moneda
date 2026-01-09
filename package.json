@@ -1,0 +1,21 @@
+{
+  "name": "lambda-moneda",
+  "version": "1.0.0",
+  "description": "Lambda para gestión de emojis y monedas",
+  "main": "app.js",
+  "scripts": {
+    "build": "sam build",
+    "deploy": "sam deploy",
+    "local:api": "sam build && sam local start-api --port 3000",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "@types/aws-lambda": "^8.10.108",
+    "esbuild": "^0.19.0",
+    "typescript": "^5.0.0"
+  }
+}
