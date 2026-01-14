@@ -83,10 +83,10 @@ export class MonedaBL implements IMonedaBL {
     return {
       monedas,
       pagination: {
-        pageNumber: 1,
+        totalElement: monedas.length,
         pageSize: monedas.length,
-        totalRecords: monedas.length,
-        totalPages: 1
+        pageNumber: 1,
+        hasMoreElements: false
       }
     };
   }
@@ -104,16 +104,17 @@ export class MonedaBL implements IMonedaBL {
     // Transformar a modelos de dominio
     const monedas = MonedaMapper.toDomainList(result.data);
 
-    // Calcular total de páginas
+    // Calcular si hay más elementos
     const totalPages = Math.ceil(result.totalRecords / pagination.pageSize);
+    const hasMoreElements = pagination.pageNumber < totalPages;
 
     return {
       monedas,
       pagination: {
-        pageNumber: pagination.pageNumber,
+        totalElement: result.totalRecords,
         pageSize: pagination.pageSize,
-        totalRecords: result.totalRecords,
-        totalPages
+        pageNumber: pagination.pageNumber,
+        hasMoreElements
       }
     };
   }

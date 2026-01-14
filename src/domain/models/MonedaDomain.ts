@@ -18,10 +18,10 @@ export interface PaginationParams {
 
 // Respuesta de paginación
 export interface PaginationResponse {
-  pageNumber: number;
+  totalElement: number;
   pageSize: number;
-  totalRecords: number;
-  totalPages: number;
+  pageNumber: number;
+  hasMoreElements: boolean;
 }
 
 // Respuesta para operación individual (GET, PUT, DELETE)
