@@ -141,9 +141,9 @@ export enum QUERIES {
 // ===========================
 export enum ALLOWED_HEADERS_VALUES {
     CONTENT_TYPE = 'application/json',
-    ALLOWED_HEADERS = '*',
+    ALLOWED_HEADERS = 'Content-Type,message-uuid,request-app-id,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
     ALLOW_ORIGIN = '*',
-    ALLOWED_METHODS = 'POST,GET,PUT,DELETE,OPTIONS',
+    ALLOWED_METHODS = 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
 }
 
 // ===========================

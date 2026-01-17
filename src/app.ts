@@ -19,6 +19,22 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent, context: Contex
         const messageUuid = event.headers?.['message-uuid'] || event.headers?.['Message-Uuid'] || '';
         const requestAppId = event.headers?.['request-app-id'] || event.headers?.['Request-App-Id'] || '';
 
+        // =========================
+        // OPTIONS - CORS Preflight
+        // =========================
+        if (method === 'OPTIONS') {
+            return {
+                statusCode: 200,
+                headers: {
+                    'Content-Type': ALLOWED_HEADERS_VALUES.CONTENT_TYPE,
+                    'Access-Control-Allow-Headers': ALLOWED_HEADERS_VALUES.ALLOWED_HEADERS,
+                    'Access-Control-Allow-Origin': ALLOWED_HEADERS_VALUES.ALLOW_ORIGIN,
+                    'Access-Control-Allow-Methods': ALLOWED_HEADERS_VALUES.ALLOWED_METHODS,
+                },
+                body: JSON.stringify({ message: 'CORS preflight successful' })
+            };
+        }
+
         // Validar headers requeridos
         if (!messageUuid || !requestAppId) {
             const errors = [
