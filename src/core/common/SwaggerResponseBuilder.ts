@@ -1,6 +1,7 @@
 import {
   SwaggerSuccessResponse,
   SwaggerErrorResponse,
+  SwaggerPaginatedResponse,
   SwaggerResponseHeaders,
   SwaggerMessageResponse,
   SwaggerErrorItem
@@ -130,6 +131,47 @@ export class SwaggerResponseBuilder {
     };
 
     return errorDetails[statusCode] || 'An error occurred';
+  }
+
+  /**
+   * Construir respuesta paginada en formato Swagger
+   */
+  static buildPaginatedResponse<T>(
+    statusCode: number,
+    data: T,
+    pagination: {
+      totalElement: number;
+      pageSize: number;
+      pageNumber: number;
+      hasMoreElements: boolean;
+    },
+    messageUuid: string,
+    requestAppId: string,
+    responseCode: string = '0000',
+    responseMessage: string = 'Success',
+    responseDetails: string = 'Operation completed successfully'
+  ): SwaggerPaginatedResponse<T> {
+
+    const headers: SwaggerResponseHeaders = {
+      httpStatusCode: statusCode,
+      httpStatusDesc: this.getStatusDescription(statusCode),
+      messageUuid: messageUuid,
+      requestDatetime: new Date().toISOString(),
+      requestAppId: requestAppId
+    };
+
+    const messageResponse: SwaggerMessageResponse = {
+      responseCode,
+      responseMessage,
+      responseDetails
+    };
+
+    return {
+      headers,
+      messageResponse,
+      data,
+      pagination
+    };
   }
 
   /**

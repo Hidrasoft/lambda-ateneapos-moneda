@@ -1,11 +1,12 @@
-# Arquitectura Lambda Moneda - Guía de Desarrollo
+# Arquitectura Lambda Moneda - Sistema POS Atenea
 
 ## Tabla de Contenidos
 1. [Diagrama de Arquitectura](#diagrama-de-arquitectura)
 2. [Comunicación Entre Capas](#comunicación-entre-capas)
-3. [Ejemplo Paso a Paso: Crear Cliente](#ejemplo-paso-a-paso-crear-cliente)
+3. [Ejemplo Completo: API de Monedas](#ejemplo-completo-api-de-monedas)
 4. [Guía de Testing con SAM CLI](#guía-de-testing-con-sam-cli)
 5. [Estructura de Archivos](#estructura-de-archivos)
+6. [Checklist de Implementación](#checklist-de-implementación)
 
 ---
 
@@ -16,8 +17,9 @@
 ```
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃                          API GATEWAY                              ┃
-┃                    POST /InfoEmojis                               ┃
-┃                    Body: {"customerId": 1234}                     ┃
+┃                    POST /v1/pos/monedas                           ┃
+┃                    Headers: message-uuid, request-app-id          ┃
+┃                    Body: {"codigoIso": "COP", "nombre": "Peso"}  ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
                                 │
                                 │ APIGatewayProxyEvent
@@ -28,140 +30,224 @@
 ┃                                                                   ┃
 ┃  export const lambdaHandler = async (event, context) => {        ┃
 ┃    const method = event.httpMethod;  // 'POST'                   ┃
-┃    const body = JSON.parse(event.body);  // {customerId: 1234}   ┃
+┃    const body = JSON.parse(event.body);                          ┃
+┃    const messageUuid = event.headers?.['message-uuid'];          ┃
+┃    const requestAppId = event.headers?.['request-app-id'];       ┃
+┃                                                                   ┃
+┃    // Validar headers requeridos                                 ┃
+┃    if (!messageUuid || !requestAppId) {                          ┃
+┃      return { statusCode: 400, ... };                            ┃
+┃    }                                                              ┃
 ┃                                                                   ┃
 ┃    // 🔧 Dependency Injection Manual                             ┃
-┃    const controller = new EmojisController(                      ┃
-┃      new EmojisBL(                                               ┃
-┃        new ListEmojisRepository()                                ┃
+┃    const controller = new MonedaController(                      ┃
+┃      new MonedaBL(                                               ┃
+┃        new MonedaRepository()                                    ┃
 ┃      )                                                            ┃
 ┃    );                                                             ┃
 ┃                                                                   ┃
-┃    return await controller.listEmojisByCustomer(body);           ┃
+┃    return await controller.createMoneda(body,                    ┃
+┃                             messageUuid, requestAppId);          ┃
 ┃  }                                                                ┃
 ┃                                                                   ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
                                 │
-                                │ StatusByCustomerDTO
+                                │ MonedaRequestDTO + Headers
                                 ▼
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃  CAPA 1: CONTROLLER              📍 src/controller/              ┃
 ┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
 ┃                                                                   ┃
-┃  class EmojisController {                                        ┃
-┃    constructor(private emojisBL: IEmojisBL) {}                   ┃
+┃  class MonedaController {                                        ┃
+┃    constructor(private monedaBL: IMonedaBL) {}                   ┃
 ┃                                                                   ┃
-┃    async listEmojisByCustomer(data) {                            ┃
+┃    async createMoneda(data, messageUuid, requestAppId) {         ┃
 ┃      try {                                                        ┃
-┃        const result = await this.emojisBL                        ┃
-┃                           .listEmojisByCustomer(data);           ┃
+┃        // Llamar Business Logic                                  ┃
+┃        const moneda = await this.monedaBL.createMoneda(data);    ┃
 ┃                                                                   ┃
-┃        return ResponseWriter.objectResponse(200, result);        ┃
+┃        // Construir respuesta Swagger 201 CREATED                ┃
+┃        const response = SwaggerResponseBuilder                   ┃
+┃                           .buildSuccessResponse(                 ┃
+┃                             201, moneda, messageUuid,            ┃
+┃                             requestAppId                         ┃
+┃                           );                                     ┃
+┃                                                                   ┃
+┃        return { statusCode: 201, headers: {...},                 ┃
+┃                 body: JSON.stringify(response) };                ┃
+┃                                                                   ┃
 ┃      } catch (e) {                                               ┃
-┃        return ResponseWriter.objectResponse(500, e);             ┃
+┃        return this.handleError(e, messageUuid, requestAppId);    ┃
 ┃      }                                                            ┃
 ┃    }                                                              ┃
 ┃  }                                                                ┃
 ┃                                                                   ┃
+┃  ┌────────────────────────────────────────────────────┐          ┃
+┃  │  SwaggerResponseBuilder                           │          ┃
+┃  ├────────────────────────────────────────────────────┤          ┃
+┃  │  + buildSuccessResponse(statusCode, data, ...)    │          ┃
+┃  │  + buildErrorResponse(statusCode, errors, ...)    │          ┃
+┃  │  + buildErrorItem(errorCode, errorDetail)         │          ┃
+┃  │                                                    │          ┃
+┃  │  Formato estandarizado con headers:               │          ┃
+┃  │  - httpStatusCode, httpStatusDesc                 │          ┃
+┃  │  - messageUuid, requestDatetime, requestAppId     │          ┃
+┃  └────────────────────────────────────────────────────┘          ┃
+┃                                                                   ┃
 ┃  Responsabilidades:                                              ┃
 ┃  ✓ Orquestar peticiones HTTP                                    ┃
 ┃  ✓ Invocar Business Logic                                       ┃
-┃  ✓ Formatear respuestas HTTP (200, 500)                         ┃
-┃  ✗ NO contiene lógica de negocio                                ┃
+┃  ✓ Formatear respuestas según contrato Swagger                  ┃
+┃  ✓ Manejo centralizado de errores (400, 404, 409, 500)          ┃
+┃  ✗ NO contiene lógica de negocio ni validaciones                ┃
 ┃                                                                   ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
                                 │
-                                │ StatusByCustomerDTO
+                                │ MonedaRequestDTO
                                 ▼
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃  CAPA 2: BUSINESS LOGIC             📍 src/domain/               ┃
 ┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
 ┃                                                                   ┃
-┃  class EmojisBL {                                                ┃
-┃    constructor(private repo: IListEmojisRepository) {}           ┃
+┃  class MonedaBL {                                                ┃
+┃    constructor(private repo: IMonedaRepository) {}               ┃
 ┃                                                                   ┃
-┃    async listEmojisByCustomer(data) {                            ┃
-┃      // 1️⃣ Llamar al repositorio                                ┃
-┃      const dtos = await this.repo                                ┃
-┃                       .listEmojisByCustomer(data);               ┃
+┃    async createMoneda(data: MonedaRequestDTO) {                  ┃
+┃      // 1️⃣ Validar datos de entrada                             ┃
+┃      this.validateMonedaData(data);                              ┃
 ┃                                                                   ┃
-┃      // 2️⃣ Aplicar transformaciones con Mapper                  ┃
-┃      const domainModels = EmojisMapper                           ┃
-┃                            .toDomainCustomer(dtos);              ┃
+┃      // 2️⃣ Validar regla de negocio: código ISO único           ┃
+┃      const exists = await this.repo                              ┃
+┃                       .checkMonedaExistsByIso(data.codigoIso);   ┃
+┃      if (exists) {                                               ┃
+┃        throw new ConflictError(                                  ┃
+┃          `Ya existe moneda con código: ${data.codigoIso}`        ┃
+┃        );                                                         ┃
+┃      }                                                            ┃
 ┃                                                                   ┃
-┃      // 3️⃣ Construir respuesta de dominio                        ┃
-┃      return {                                                     ┃
-┃        data: domainModels,                                       ┃
-┃        operation: OPERATION_SUCCESS_RESPONSE                     ┃
-┃      };                                                           ┃
+┃      // 3️⃣ Llamar al repositorio                                ┃
+┃      const monedaDTO = await this.repo.createMoneda(data);       ┃
+┃                                                                   ┃
+┃      // 4️⃣ Transformar DTO → Domain Model                       ┃
+┃      return MonedaMapper.toDomain(monedaDTO);                    ┃
+┃    }                                                              ┃
+┃                                                                   ┃
+┃    private validateMonedaData(data) {                            ┃
+┃      if (!data.codigoIso || data.codigoIso.length !== 3) {       ┃
+┃        throw new ValidationError('Código ISO inválido');         ┃
+┃      }                                                            ┃
+┃      // ... más validaciones                                     ┃
 ┃    }                                                              ┃
 ┃  }                                                                ┃
 ┃                                                                   ┃
 ┃  ┌────────────────────────────────────────────────────┐          ┃
 ┃  │  MAPPERS (src/domain/mappers/)                    │          ┃
 ┃  ├────────────────────────────────────────────────────┤          ┃
-┃  │  EmojisMapper.toDomainCustomer(dtos):             │          ┃
-┃  │    return dtos.map(dto => ({                      │          ┃
-┃  │      ...dto,                                       │          ┃
-┃  │      bought: dayjs(dto.endDate).isAfter(dayjs())  │  ⚡ Lógica┃
-┃  │    }))                                             │          ┃
+┃  │  MonedaMapper.toDomain(dto):                      │          ┃
+┃  │    return {                                        │          ┃
+┃  │      monedaId: dto.moneda_id,     // snake_case   │  ⚡ Mapeo┃
+┃  │      codigoIso: dto.codigo_iso,   // → camelCase  │          ┃
+┃  │      nombre: dto.nombre,                          │          ┃
+┃  │      simbolo: dto.simbolo,                        │          ┃
+┃  │      decimales: dto.decimales,                    │          ┃
+┃  │      activo: dto.activo                           │          ┃
+┃  │    }                                               │          ┃
+┃  └────────────────────────────────────────────────────┘          ┃
+┃                                                                   ┃
+┃  ┌────────────────────────────────────────────────────┐          ┃
+┃  │  EXCEPCIONES PERSONALIZADAS                       │          ┃
+┃  ├────────────────────────────────────────────────────┤          ┃
+┃  │  • ValidationError - Datos inválidos (→ 400)      │          ┃
+┃  │  • NotFoundError - Recurso no existe (→ 404)      │          ┃
+┃  │  • ConflictError - Violación unicidad (→ 409)     │          ┃
 ┃  └────────────────────────────────────────────────────┘          ┃
 ┃                                                                   ┃
 ┃  Responsabilidades:                                              ┃
-┃  ✓ Implementar reglas de negocio                                ┃
+┃  ✓ Implementar validaciones de entrada                          ┃
+┃  ✓ Implementar reglas de negocio (unicidad, formato)            ┃
 ┃  ✓ Orquestar repositorios                                       ┃
 ┃  ✓ Aplicar transformaciones (DTOs → Domain Models)              ┃
+┃  ✓ Lanzar excepciones tipadas                                   ┃
 ┃  ✗ NO accede directamente a la BD                               ┃
 ┃                                                                   ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
                                 │
-                                │ StatusByCustomerDTO
+                                │ MonedaRequestDTO
                                 ▼
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃  CAPA 3: REPOSITORY            📍 src/repositories/              ┃
 ┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
 ┃                                                                   ┃
-┃  class ListEmojisRepository {                                    ┃
+┃  class MonedaRepository {                                        ┃
 ┃                                                                   ┃
-┃    async listEmojisByCustomer(status) {                          ┃
-┃      // 1️⃣ Obtener conexión del pool                            ┃
-┃      const conn = await mysqlClient.getConnection();             ┃
+┃    async createMoneda(data: MonedaRequestDTO) {                  ┃
+┃      // Valores por defecto                                      ┃
+┃      const decimales = data.decimales ?? 2;                      ┃
+┃      const activo = data.activo ?? true;                         ┃
 ┃                                                                   ┃
-┃      try {                                                        ┃
-┃        // 2️⃣ Ejecutar query con prepared statement              ┃
-┃        const [rows] = await conn.query(                          ┃
-┃          QUERIES.LIST_EMOJIS_BY_CUSTOMER,                        ┃
-┃          [status.customerId]    // ⚡ Protección SQL Injection   ┃
-┃        );                                                         ┃
+┃      // 1️⃣ Ejecutar INSERT con RETURNING (PostgreSQL)           ┃
+┃      const result = await pgPool.query(                          ┃
+┃        QUERIES.CREATE_MONEDA,                                    ┃
+┃        [data.codigoIso, data.nombre,                             ┃
+┃         data.simbolo, decimales, activo]  // ⚡ Parametrizado    ┃
+┃      );                                                           ┃
 ┃                                                                   ┃
-┃        // 3️⃣ Mapear a DTO                                        ┃
-┃        return rows as LisEmojisByCustomerDTO[];                  ┃
+┃      // 2️⃣ Retornar registro insertado (con ID autogenerado)    ┃
+┃      return result.rows[0] as MonedaDTO;                         ┃
+┃    }                                                              ┃
 ┃                                                                   ┃
-┃      } finally {                                                  ┃
-┃        // 4️⃣ SIEMPRE liberar conexión                           ┃
-┃        conn.release();                                           ┃
-┃      }                                                            ┃
+┃    async listMonedasPaginated(pagination) {                      ┃
+┃      // Calcular offset                                          ┃
+┃      const offset = (pagination.pageNumber - 1)                  ┃
+┃                   * pagination.pageSize;                         ┃
+┃                                                                   ┃
+┃      // Obtener total de registros                               ┃
+┃      const countResult = await pgPool.query(                     ┃
+┃        QUERIES.COUNT_MONEDAS                                     ┃
+┃      );                                                           ┃
+┃                                                                   ┃
+┃      // Obtener datos paginados                                  ┃
+┃      const dataResult = await pgPool.query(                      ┃
+┃        QUERIES.LIST_MONEDAS_PAGINATED,                           ┃
+┃        [pagination.pageSize, offset]                             ┃
+┃      );                                                           ┃
+┃                                                                   ┃
+┃      return {                                                     ┃
+┃        data: dataResult.rows as MonedaDTO[],                     ┃
+┃        totalRecords: parseInt(countResult.rows[0]?.total || '0') ┃
+┃      };                                                           ┃
 ┃    }                                                              ┃
 ┃  }                                                                ┃
 ┃                                                                   ┃
 ┃  ┌────────────────────────────────────────────────────┐          ┃
 ┃  │  DTOs (src/repositories/dtos/)                    │          ┃
 ┃  ├────────────────────────────────────────────────────┤          ┃
-┃  │  interface LisEmojisByCustomerDTO {               │          ┃
-┃  │    itemId: number;                                │          ┃
-┃  │    nameItem: string;                              │          ┃
-┃  │    price: number;                                 │          ┃
-┃  │    purchaseDate: string;                          │          ┃
-┃  │    endDate: string;       // ⚡ Estructura exacta │          ┃
-┃  │    url: string;           //    de la BD          │          ┃
+┃  │  // DTO de request (camelCase)                    │          ┃
+┃  │  interface MonedaRequestDTO {                     │          ┃
+┃  │    codigoIso: string;                             │          ┃
+┃  │    nombre: string;                                │          ┃
+┃  │    simbolo: string;                               │          ┃
+┃  │    decimales?: number;                            │          ┃
+┃  │    activo?: boolean;                              │          ┃
+┃  │  }                                                 │          ┃
+┃  │                                                    │          ┃
+┃  │  // DTO de respuesta BD (snake_case)              │          ┃
+┃  │  interface MonedaDTO {                            │          ┃
+┃  │    moneda_id: number;      // ⚡ Snake case        │          ┃
+┃  │    codigo_iso: string;     //    de PostgreSQL    │          ┃
+┃  │    nombre: string;                                │          ┃
+┃  │    simbolo: string;                               │          ┃
+┃  │    decimales: number;                             │          ┃
+┃  │    activo: boolean;                               │          ┃
 ┃  │  }                                                 │          ┃
 ┃  └────────────────────────────────────────────────────┘          ┃
 ┃                                                                   ┃
 ┃  Responsabilidades:                                              ┃
-┃  ✓ Ejecutar queries SQL                                         ┃
-┃  ✓ Gestionar conexiones                                         ┃
+┃  ✓ Ejecutar queries SQL con parametrización ($1, $2...)         ┃
+┃  ✓ Gestionar pool de conexiones PostgreSQL                      ┃
 ┃  ✓ Mapear resultados a DTOs                                     ┃
-┃  ✗ NO contiene lógica de negocio                                ┃
+┃  ✓ Manejar paginación a nivel de BD                             ┃
+┃  ✗ NO contiene lógica de negocio ni validaciones                ┃
 ┃                                                                   ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
                                 │
@@ -173,39 +259,68 @@
 ┃                                                                   ┃
 ┃  DatabaseManager.ts:                                             ┃
 ┃  ─────────────────────────────────────────────────────           ┃
-┃  export const mysqlClient = mysql.createPool({                   ┃
-┃    host: 'db-game.c1g6mycog0un.me-south-1.rds...',              ┃
-┃    database: 'db-game',                                          ┃
-┃    user: 'admin',                                                ┃
-┃    password: '***',                                              ┃
-┃    connectionLimit: 10   // ⚡ Pool de conexiones                ┃
-┃  });                                                             ┃
+┃  import { Pool } from 'pg';                                      ┃
+┃  import config from '../config';                                 ┃
+┃                                                                   ┃
+┃  // Pool de conexiones PostgreSQL                                ┃
+┃  const pgPool = new Pool(                                        ┃
+┃    config.DATABASE[config.NODE_ENVIRONMENT]                      ┃
+┃  );                                                               ┃
+┃                                                                   ┃
+┃  pgPool.on('error', (err) => {                                   ┃
+┃    console.error('Error en pool PostgreSQL:', err);              ┃
+┃  });                                                              ┃
+┃                                                                   ┃
+┃  export const mysqlClient = pgPool;  // Alias histórico          ┃
+┃                                                                   ┃
+┃  config/index.ts:                                                ┃
+┃  ─────────────────────────────────────────────────────           ┃
+┃  DATABASE: {                                                     ┃
+┃    DEV: {                                                        ┃
+┃      host: "db-atenea-pos...us-east-1.rds.amazonaws.com",        ┃
+┃      user: "postgres",                                           ┃
+┃      password: process.env.PG_PASSWORD,                          ┃
+┃      database: "ateneapos",                                      ┃
+┃      port: 5432,                                                 ┃
+┃      ssl: { rejectUnauthorized: false }                          ┃
+┃    }                                                              ┃
+┃  }                                                                ┃
 ┃                                                                   ┃
 ┃  Constans.ts:                                                    ┃
 ┃  ─────────────────────────────────────────────────────           ┃
 ┃  enum QUERIES {                                                  ┃
-┃    LIST_EMOJIS_BY_CUSTOMER = `                                   ┃
-┃      SELECT i.itemId, i.nameItem, i.price, i.url,               ┃
-┃             p.purchaseDate, p.endDate                            ┃
-┃      FROM customer c, account a, purchaseItem p,                ┃
-┃           item i, category ct                                    ┃
-┃      WHERE ct.descriptionCategory = "Emojis"                     ┃
-┃        AND c.customerId = ?       // ⚡ Prepared statement        ┃
-┃        AND ct.categoryId = i.itemCategory                        ┃
-┃        AND i.itemId = p.itemId                                   ┃
-┃        AND a.accountId = p.accountId                             ┃
-┃        AND c.customerId = a.accountCustomer                      ┃
-┃      ORDER BY p.itemId                                           ┃
-┃    `                                                             ┃
+┃    CREATE_MONEDA = `                                             ┃
+┃      INSERT INTO moneda                                          ┃
+┃        (codigo_iso, nombre, simbolo, decimales, activo)          ┃
+┃      VALUES ($1, $2, $3, $4, $5)    // ⚡ PostgreSQL placeholders┃
+┃      RETURNING moneda_id, codigo_iso, nombre,                    ┃
+┃                simbolo, decimales, activo                        ┃
+┃    `,                                                             ┃
+┃                                                                   ┃
+┃    GET_MONEDA_BY_ID = `                                          ┃
+┃      SELECT moneda_id, codigo_iso, nombre, simbolo,              ┃
+┃             decimales, activo                                    ┃
+┃      FROM moneda                                                 ┃
+┃      WHERE moneda_id = $1                                        ┃
+┃    `,                                                             ┃
+┃                                                                   ┃
+┃    LIST_MONEDAS_PAGINATED = `                                    ┃
+┃      SELECT moneda_id, codigo_iso, nombre, simbolo,              ┃
+┃             decimales, activo                                    ┃
+┃      FROM moneda                                                 ┃
+┃      ORDER BY moneda_id                                          ┃
+┃      LIMIT $1 OFFSET $2       // ⚡ Paginación PostgreSQL         ┃
+┃    `                                                              ┃
 ┃  }                                                                ┃
 ┃                                                                   ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
                                 │
                                 ▼
                     ┌───────────────────────┐
-                    │   MySQL RDS Database  │
-                    │   db-game             │
-                    │   me-south-1          │
+                    │ PostgreSQL RDS        │
+                    │ db-atenea-pos         │
+                    │ us-east-1             │
+                    │ Database: ateneapos   │
                     └───────────────────────┘
 ```
 
@@ -219,1018 +334,1309 @@
 REQUEST                                                          RESPONSE
 ────────                                                         ────────
 
-POST /InfoEmojis                                        200 OK + JSON
-Body: {"customerId": 1234}                             ┌──────────────┐
-       │                                                │ {            │
-       │                                                │   data: [...],
-       ▼                                                │   operation  │
-┌─────────────────┐                                     │ }            │
-│  Lambda Handler │ ──┐                                 └──────────────┘
+POST /v1/pos/monedas                                    201 CREATED + JSON
+Headers:                                                ┌──────────────────┐
+  message-uuid: abc-123                                 │ {                │
+  request-app-id: POS-APP                               │   headers: {     │
+Body: {                                                 │     httpStatus...,
+  "codigoIso": "COP",                                   │     messageUuid,│
+  "nombre": "Peso Colombiano",                          │     ...         │
+  "simbolo": "$",                                       │   },            │
+  "decimales": 2                                        │   data: {       │
+}                                                        │     monedaId: 1,│
+       │                                                 │     codigoIso...,
+       │                                                 │   },            │
+       ▼                                                 │   messageResp.. │
+┌─────────────────┐                                     │ }                │
+│  Lambda Handler │ ──┐                                 └──────────────────┘
 │  app.ts         │   │                                        ▲
 └─────────────────┘   │                                        │
        │              │                                        │
        │ Parse body   │                                        │
+       │ Extract hdrs │                                        │
+       ▼              │                                        │
+MonedaRequestDTO       │                              APIGatewayProxyResult
+{ codigoIso: "COP",   │                                        │
+  nombre: "Peso..."   │                                        │
+  ... }               │                                        │
        │              │                                        │
        ▼              │                                        │
-StatusByCustomerDTO   │                              APIGatewayProxyResult
-{ customerId: 1234 }  │                                        │
-       │              │                                        │
-       │              │                                        │
-       ▼              │                                        │
-┌─────────────────┐  │ DI                              ┌──────┴───────┐
-│  Controller     │ ◀┘ new Controller(                 │ ResponseWriter
-│  EmojisCtrl.ts  │      new BL(                       │ .objectResponse()
-└─────────────────┘        new Repo()                  └──────────────┘
-       │                 )                                     ▲
-       │                )                                      │
+┌─────────────────┐  │ DI                              ┌──────┴───────────┐
+│  Controller     │ ◀┘ new MonedaController(           │ SwaggerResponse  │
+│  MonedaCtrl.ts  │      new MonedaBL(                 │ Builder          │
+└─────────────────┘        new Repo()                  │ .buildSuccess..()│
+       │                 )                              └──────────────────┘
+       │                )                                      ▲
        ▼                                                       │
-  call BL method                                        EmojisDomainCustomer
-       │                                                { data, operation }
+  call BL method                                        Moneda (Domain)
+       │                                                { monedaId, ...  }
        │                                                       │
        ▼                                                       │
 ┌─────────────────┐                                     ┌──────┴───────┐
-│  Business Logic │                                     │  EmojisBL    │
-│  EmojisBL.ts    │ ────────────────────────────────▶  │  return {... }
+│  Business Logic │                                     │  MonedaBL    │
+│  MonedaBL.ts    │ ────────────────────────────────▶  │  return {...}│
 └─────────────────┘                                     └──────────────┘
        │                                                       ▲
-       │ call repository                                      │
+       │ 1. Validate                                          │
+       │ 2. Check exists                                      │
+       │ 3. Call repository                                   │
+       │ 4. Map to domain                                     │
        ▼                                                       │
-StatusByCustomerDTO                      LisEmojisByCustomerDTO[]
+MonedaRequestDTO                                  MonedaDTO (from DB)
        │                                           │           │
        │                                           │  Mapper   │
-       ▼                                           │  applies  │
-┌─────────────────┐                                │  business │
-│  Repository     │                                │  logic    │
-│  ListEmojisRepo │ ───────────────────────────────┘           │
+       ▼                                           │  converts │
+┌─────────────────┐                                │  snake to │
+│  Repository     │                                │  camel    │
+│  MonedaRepo.ts  │ ───────────────────────────────┘           │
 └─────────────────┘                                            │
        │                                                       │
-       │ conn.query(QUERY, [customerId])                      │
+       │ pgPool.query(QUERY, [params])                        │
        ▼                                                       │
   SQL Execution                                                │
        │                                                       │
-       │                                                       │
        ▼                                                       │
 ┌─────────────────┐                                            │
-│  MySQL RDS      │                                            │
+│  PostgreSQL RDS │                                            │
 │  Database       │ ───────────────────────────────────────────┘
-└─────────────────┘        Raw rows as DTO[]
+└─────────────────┘        Raw rows as DTO
+
 ```
 
 ### Transformación de Datos por Capa
 
 ```
-Capa               Input                    Output                    Tipo
-─────              ─────                    ──────                    ────
+Capa               Input                       Output                      Tipo
+─────              ─────                       ──────                      ────
 
-Handler            APIGatewayProxyEvent     APIGatewayProxyResult     AWS Types
+Handler            APIGatewayProxyEvent        APIGatewayProxyResult       AWS Types
                    ↓
-                   { body: '{"customerId": 1234}' }
-                   ↓ JSON.parse
+                   { body: '{"codigoIso":..}', headers: {...} }
+                   ↓ JSON.parse + extract
 
-Controller         StatusByCustomerDTO      APIResponse               HTTP
-                   { customerId: 1234 }     { statusCode, headers,
-                   ↓                          body: JSON }
+Controller         MonedaRequestDTO +          APIGatewayProxyResult       HTTP/Swagger
+                   messageUuid +                { statusCode: 201,
+                   requestAppId                   headers: {...},
+                   ↓                              body: JSON Swagger }
 
-Business Logic     StatusByCustomerDTO      EmojisDomainCustomer      Domain
-                   { customerId: 1234 }     { data: [...],
-                   ↓                          operation: {...} }
+Business Logic     MonedaRequestDTO            Moneda (Domain Model)       Domain
+                   { codigoIso, nombre, ... }   { monedaId, codigoIso,
+                   ↓                              nombre, ... }
 
-Repository         StatusByCustomerDTO      LisEmojisByCustomerDTO[]  Data
-                   { customerId: 1234 }     [{ itemId, nameItem,
-                   ↓                          price, purchaseDate,
-                                              endDate, url }]
+Repository         MonedaRequestDTO            MonedaDTO (snake_case)      Data
+                   { codigoIso, nombre, ... }   { moneda_id, codigo_iso,
+                   ↓                              nombre, ... }
 
-Database           SQL Query + Params       Raw Rows                  SQL
-                   [1234]                   ResultSet
+Database           SQL Query + Params          Raw Rows                    SQL
+                   [$1, $2, $3...]             ResultSet
 ```
 
 ---
 
-## Ejemplo Paso a Paso: Crear Cliente
+## Ejemplo Completo: API de Monedas
 
-Vamos a crear una nueva lambda para **insertar un cliente** en la tabla `customer` de la BD.
+### Endpoints Implementados
 
-### 📋 Requisitos
+La API de Monedas implementa los siguientes endpoints:
 
-**Endpoint:** `POST /CreateCustomer`
+| Método | Endpoint | Descripción |
+|--------|----------|-------------|
+| POST | `/v1/pos/monedas` | Crear nueva moneda |
+| GET | `/v1/pos/monedas?pageNumber=1&pageSize=10` | Listar monedas paginadas |
+| GET | `/v1/pos/monedas/{monedaId}` | Obtener moneda por ID |
+| PUT | `/v1/pos/monedas/{monedaId}` | Actualizar moneda |
+| DELETE | `/v1/pos/monedas/{monedaId}` | Eliminar moneda |
 
-**Body Request:**
-```json
+### Análisis Detallado: POST /v1/pos/monedas
+
+#### 📋 Request
+
+```http
+POST /v1/pos/monedas
+Headers:
+  message-uuid: 550e8400-e29b-41d4-a716-446655440000
+  request-app-id: POS-ATENEA
+  Content-Type: application/json
+
+Body:
 {
-  "name": "Juan Pérez",
-  "email": "juan@example.com",
-  "phone": "+1234567890"
+  "codigoIso": "COP",
+  "nombre": "Peso Colombiano",
+  "simbolo": "$",
+  "decimales": 2,
+  "activo": true
 }
 ```
 
-**Response:**
+#### ✅ Response (Éxito - 201 CREATED)
+
 ```json
 {
-  "data": {
-    "customerId": 123,
-    "name": "Juan Pérez",
-    "email": "juan@example.com",
-    "phone": "+1234567890",
-    "createdAt": "2026-01-07T10:30:00Z"
+  "headers": {
+    "httpStatusCode": 201,
+    "httpStatusDesc": "CREATED",
+    "messageUuid": "550e8400-e29b-41d4-a716-446655440000",
+    "requestDatetime": "2026-02-21T10:30:00.000Z",
+    "requestAppId": "POS-ATENEA"
   },
-  "operation": {
-    "statusCode": 201,
-    "status": "Success",
-    "message": "Customer created successfully"
+  "messageResponse": {
+    "responseCode": "0000",
+    "responseMessage": "Success",
+    "responseDetails": "Resource created successfully"
+  },
+  "data": {
+    "monedaId": 1,
+    "codigoIso": "COP",
+    "nombre": "Peso Colombiano",
+    "simbolo": "$",
+    "decimales": 2,
+    "activo": true
   }
 }
 ```
 
----
+#### ❌ Response (Error - 409 CONFLICT)
 
-### 🔧 PASO 1: Crear DTOs
+```json
+{
+  "headers": {
+    "httpStatusCode": 409,
+    "httpStatusDesc": "CONFLICT",
+    "messageUuid": "550e8400-e29b-41d4-a716-446655440000",
+    "requestDatetime": "2026-02-21T10:30:00.000Z",
+    "requestAppId": "POS-ATENEA"
+  },
+  "messageResponse": {
+    "responseCode": "0409",
+    "responseMessage": "Conflict",
+    "responseDetails": "Resource already exists or violates unique constraint"
+  },
+  "errors": [
+    {
+      "errorCode": "E003",
+      "errorDetail": "Ya existe una moneda con el código ISO: COP"
+    }
+  ]
+}
+```
 
-**Archivo:** `src/repositories/dtos/CreateCustomerDTO.ts`
+### Flujo Completo de Implementación
+
+#### 🔧 PASO 1: Crear DTOs
+
+**Archivo:** `src/repositories/dtos/MonedaDTO.ts`
 
 ```typescript
-// DTO de entrada (lo que recibe el endpoint)
-export interface CreateCustomerRequestDTO {
-  name: string;
-  email: string;
-  phone: string;
+// DTO de request (lo que recibe el endpoint - camelCase)
+export interface MonedaRequestDTO {
+  codigoIso: string;
+  nombre: string;
+  simbolo: string;
+  decimales?: number;  // Opcional, default: 2
+  activo?: boolean;    // Opcional, default: true
 }
 
-// DTO de respuesta (lo que devuelve la BD después del INSERT)
-export interface CreateCustomerResponseDTO {
-  customerId: number;
-  name: string;
-  email: string;
-  phone: string;
-  createdAt: string;
+// DTO de respuesta de la BD (snake_case - nomenclatura PostgreSQL)
+export interface MonedaDTO {
+  moneda_id: number;
+  codigo_iso: string;
+  nombre: string;
+  simbolo: string;
+  decimales: number;
+  activo: boolean;
 }
 ```
 
 ---
 
-### 🔧 PASO 2: Agregar Query SQL en Constans.ts
+#### 🔧 PASO 2: Agregar Queries en Constans.ts
 
 **Archivo:** `src/core/utils/Constans.ts`
 
 ```typescript
 export enum QUERIES {
-  // ... queries existentes
-
-  // Nueva query para crear cliente
-  CREATE_CUSTOMER = `
-    INSERT INTO customer (name, email, phone, createdAt)
-    VALUES (?, ?, ?, NOW())
+  // Crear moneda con RETURNING (PostgreSQL)
+  CREATE_MONEDA = `
+    INSERT INTO moneda (codigo_iso, nombre, simbolo, decimales, activo)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING moneda_id, codigo_iso, nombre, simbolo, decimales, activo
   `,
 
-  // Query para obtener el cliente recién creado
-  GET_CUSTOMER_BY_ID = `
-    SELECT customerId, name, email, phone, createdAt
-    FROM customer
-    WHERE customerId = ?
+  // Obtener moneda por ID
+  GET_MONEDA_BY_ID = `
+    SELECT moneda_id, codigo_iso, nombre, simbolo, decimales, activo
+    FROM moneda
+    WHERE moneda_id = $1
+  `,
+
+  // Listar con paginación
+  LIST_MONEDAS_PAGINATED = `
+    SELECT moneda_id, codigo_iso, nombre, simbolo, decimales, activo
+    FROM moneda
+    ORDER BY moneda_id
+    LIMIT $1 OFFSET $2
+  `,
+
+  // Contar total de registros
+  COUNT_MONEDAS = `
+    SELECT COUNT(*) as total
+    FROM moneda
+  `,
+
+  // Actualizar moneda
+  UPDATE_MONEDA = `
+    UPDATE moneda
+    SET codigo_iso = $1, nombre = $2, simbolo = $3,
+        decimales = $4, activo = $5
+    WHERE moneda_id = $6
+    RETURNING moneda_id, codigo_iso, nombre, simbolo, decimales, activo
+  `,
+
+  // Eliminar moneda
+  DELETE_MONEDA = `
+    DELETE FROM moneda
+    WHERE moneda_id = $1
+    RETURNING moneda_id, codigo_iso, nombre, simbolo, decimales, activo
+  `,
+
+  // Verificar si existe código ISO
+  CHECK_MONEDA_EXISTS_BY_ISO = `
+    SELECT COUNT(*) as count
+    FROM moneda
+    WHERE codigo_iso = $1 AND moneda_id != $2
   `
 }
-
-// Nuevo código HTTP para creación
-export enum HttpStatus {
-  OK = 200,
-  CREATED = 201,  // ⭐ Agregar este
-  BAD_REQUEST = 400,  // ⭐ Agregar este para validaciones
-  INTERNAL_SERVER_ERROR = 500,
-  SERVICE_UNAVAILABLE = 503
-}
-
-// Nueva respuesta de éxito para CREATE
-export const OPERATION_CREATED_RESPONSE = {
-  statusCode: 201,
-  status: "Success",
-  message: "Customer created successfully"
-};
 ```
 
 ---
 
-### 🔧 PASO 3: Crear Repository
+#### 🔧 PASO 3: Implementar Repository
 
-**Archivo:** `src/repositories/ICustomerRepository.ts`
+**Archivo:** `src/repositories/IMonedaRepository.ts`
 
 ```typescript
-import { CreateCustomerRequestDTO, CreateCustomerResponseDTO } from './dtos/CreateCustomerDTO';
+import { MonedaRequestDTO, MonedaDTO } from './dtos/MonedaDTO';
+import { PaginationParams } from '../domain/models/MonedaDomain';
 
-export interface ICustomerRepository {
-  createCustomer(data: CreateCustomerRequestDTO): Promise<CreateCustomerResponseDTO>;
+export interface PaginatedResult<T> {
+  data: T[];
+  totalRecords: number;
+}
+
+export interface IMonedaRepository {
+  createMoneda(data: MonedaRequestDTO): Promise<MonedaDTO>;
+  getMonedaById(monedaId: number): Promise<MonedaDTO | null>;
+  listMonedasPaginated(pagination: PaginationParams): Promise<PaginatedResult<MonedaDTO>>;
+  updateMoneda(monedaId: number, data: MonedaRequestDTO): Promise<MonedaDTO | null>;
+  deleteMoneda(monedaId: number): Promise<MonedaDTO | null>;
+  checkMonedaExistsByIso(codigoIso: string, excludeId?: number): Promise<boolean>;
 }
 ```
 
-**Archivo:** `src/repositories/CustomerRepository.ts`
+**Archivo:** `src/repositories/MonedaRepository.ts`
 
 ```typescript
-import { ICustomerRepository } from './ICustomerRepository';
-import { CreateCustomerRequestDTO, CreateCustomerResponseDTO } from './dtos/CreateCustomerDTO';
-import { mysqlClient } from '../core/utils/DatabaseManager';
+import { IMonedaRepository, PaginatedResult } from './IMonedaRepository';
+import { MonedaRequestDTO, MonedaDTO } from './dtos/MonedaDTO';
+import { mysqlClient } from '../core/utils/DatabaseManager';  // Es pgPool
 import { QUERIES } from '../core/utils/Constans';
-import { ResultSetHeader } from 'mysql2';
+import { PaginationParams } from '../domain/models/MonedaDomain';
 
-export class CustomerRepository implements ICustomerRepository {
+export class MonedaRepository implements IMonedaRepository {
 
-  async createCustomer(data: CreateCustomerRequestDTO): Promise<CreateCustomerResponseDTO> {
-    const conn = await mysqlClient.getConnection();
+  async createMoneda(data: MonedaRequestDTO): Promise<MonedaDTO> {
+    const decimales = data.decimales ?? 2;
+    const activo = data.activo ?? true;
 
-    try {
-      // 1️⃣ Ejecutar INSERT
-      const [result] = await conn.query<ResultSetHeader>(
-        QUERIES.CREATE_CUSTOMER,
-        [data.name, data.email, data.phone]
-      );
-
-      // 2️⃣ Obtener el ID del registro insertado
-      const customerId = result.insertId;
-
-      // 3️⃣ Consultar el registro completo (para obtener createdAt generado)
-      const [rows]: any = await conn.query(
-        QUERIES.GET_CUSTOMER_BY_ID,
-        [customerId]
-      );
-
-      // 4️⃣ Retornar el primer registro como DTO
-      return rows[0] as CreateCustomerResponseDTO;
-
-    } finally {
-      // 5️⃣ SIEMPRE liberar la conexión
-      conn.release();
-    }
-  }
-}
-```
-
----
-
-### 🔧 PASO 4: Crear Modelo de Dominio
-
-**Archivo:** `src/domain/models/CustomerDomain.ts`
-
-```typescript
-import { OPERATION_CREATED_RESPONSE } from '../../core/utils/Constans';
-
-export interface CustomerDomain {
-  data: CustomerModel;
-  operation: typeof OPERATION_CREATED_RESPONSE;
-}
-
-export interface CustomerModel {
-  customerId: number;
-  name: string;
-  email: string;
-  phone: string;
-  createdAt: string;
-  // Campos calculados (si hay lógica de negocio)
-  displayName?: string;  // Ejemplo: "Juan P."
-}
-```
-
----
-
-### 🔧 PASO 5: Crear Mapper (opcional)
-
-**Archivo:** `src/domain/mappers/CustomerMapper.ts`
-
-```typescript
-import { CreateCustomerResponseDTO } from '../../repositories/dtos/CreateCustomerDTO';
-import { CustomerModel } from '../models/CustomerDomain';
-
-export class CustomerMapper {
-
-  static toDomain(dto: CreateCustomerResponseDTO): CustomerModel {
-    return {
-      customerId: dto.customerId,
-      name: dto.name,
-      email: dto.email,
-      phone: dto.phone,
-      createdAt: dto.createdAt,
-
-      // 🔥 Lógica de negocio: crear displayName
-      displayName: this.createDisplayName(dto.name)
-    };
-  }
-
-  private static createDisplayName(fullName: string): string {
-    const parts = fullName.split(' ');
-    if (parts.length < 2) return fullName;
-
-    return `${parts[0]} ${parts[1].charAt(0)}.`;  // "Juan P."
-  }
-}
-```
-
----
-
-### 🔧 PASO 6: Crear Business Logic
-
-**Archivo:** `src/domain/ICustomerBL.ts`
-
-```typescript
-import { CreateCustomerRequestDTO } from '../repositories/dtos/CreateCustomerDTO';
-import { CustomerDomain } from './models/CustomerDomain';
-
-export interface ICustomerBL {
-  createCustomer(data: CreateCustomerRequestDTO): Promise<CustomerDomain>;
-}
-```
-
-**Archivo:** `src/domain/CustomerBL.ts`
-
-```typescript
-import { ICustomerBL } from './ICustomerBL';
-import { ICustomerRepository } from '../repositories/ICustomerRepository';
-import { CreateCustomerRequestDTO } from '../repositories/dtos/CreateCustomerDTO';
-import { CustomerDomain } from './models/CustomerDomain';
-import { CustomerMapper } from './mappers/CustomerMapper';
-import { OPERATION_CREATED_RESPONSE } from '../core/utils/Constans';
-
-export class CustomerBL implements ICustomerBL {
-
-  constructor(private customerRepository: ICustomerRepository) {}
-
-  async createCustomer(data: CreateCustomerRequestDTO): Promise<CustomerDomain> {
-
-    // 🔥 Validaciones de negocio
-    this.validateCustomerData(data);
-
-    // 1️⃣ Llamar al repositorio
-    const customerDTO = await this.customerRepository.createCustomer(data);
-
-    // 2️⃣ Aplicar mapper
-    const customerModel = CustomerMapper.toDomain(customerDTO);
-
-    // 3️⃣ Construir respuesta de dominio
-    return {
-      data: customerModel,
-      operation: OPERATION_CREATED_RESPONSE
-    };
-  }
-
-  private validateCustomerData(data: CreateCustomerRequestDTO): void {
-    // Validar nombre
-    if (!data.name || data.name.trim().length === 0) {
-      throw new Error('Customer name is required');
-    }
-
-    // Validar email
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!data.email || !emailRegex.test(data.email)) {
-      throw new Error('Valid email is required');
-    }
-
-    // Validar teléfono
-    if (!data.phone || data.phone.trim().length === 0) {
-      throw new Error('Phone number is required');
-    }
-  }
-}
-```
-
----
-
-### 🔧 PASO 7: Crear Controller
-
-**Archivo:** `src/controller/ICustomerController.ts`
-
-```typescript
-import { APIResponse } from '../core/common/types';
-import { CreateCustomerRequestDTO } from '../repositories/dtos/CreateCustomerDTO';
-
-export interface ICustomerController {
-  createCustomer(data: CreateCustomerRequestDTO): Promise<APIResponse>;
-}
-```
-
-**Archivo:** `src/controller/CustomerController.ts`
-
-```typescript
-import { ICustomerController } from './ICustomerController';
-import { ICustomerBL } from '../domain/ICustomerBL';
-import { CreateCustomerRequestDTO } from '../repositories/dtos/CreateCustomerDTO';
-import { ResponseWriter } from '../core/common/ResponseWriter';
-import { HttpStatus } from '../core/utils/Constans';
-import { APIResponse } from '../core/common/types';
-
-export class CustomerController implements ICustomerController {
-
-  constructor(private customerBL: ICustomerBL) {}
-
-  async createCustomer(data: CreateCustomerRequestDTO): Promise<APIResponse> {
-    try {
-      // Llamar a la lógica de negocio
-      const result = await this.customerBL.createCustomer(data);
-
-      // Retornar con código 201 CREATED
-      return ResponseWriter.objectResponse(HttpStatus.CREATED, result);
-
-    } catch (error: any) {
-      console.error('Error in CustomerController.createCustomer:', error);
-
-      // Si es un error de validación, retornar 400 BAD REQUEST
-      if (error.message.includes('required') || error.message.includes('Valid')) {
-        return ResponseWriter.objectResponse(
-          HttpStatus.BAD_REQUEST,
-          {
-            error: error.message,
-            operation: {
-              statusCode: 400,
-              status: 'Error',
-              message: 'Validation failed'
-            }
-          }
-        );
-      }
-
-      // Otros errores: 500 INTERNAL SERVER ERROR
-      return ResponseWriter.objectResponse(
-        HttpStatus.INTERNAL_SERVER_ERROR,
-        {
-          error: 'Internal server error',
-          operation: {
-            statusCode: 500,
-            status: 'Error',
-            message: 'Failed to create customer'
-          }
-        }
-      );
-    }
-  }
-}
-```
-
----
-
-### 🔧 PASO 8: Integrar en Lambda Handler
-
-**Archivo:** `src/app.ts`
-
-```typescript
-import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
-import { ResponseWriter } from './core/common/ResponseWriter';
-import { HttpStatus, ALLOWED_HEADERS_VALUES } from './core/utils/Constans';
-
-// Controllers
-import { EmojisController } from './controller/EmojisController';
-import { CustomerController } from './controller/CustomerController';  // ⭐ NUEVO
-
-// Business Logic
-import { EmojisBL } from './domain/EmojisBL';
-import { CustomerBL } from './domain/CustomerBL';  // ⭐ NUEVO
-
-// Repositories
-import { ListEmojisRepository } from './repositories/ListEmojisRepository';
-import { CustomerRepository } from './repositories/CustomerRepository';  // ⭐ NUEVO
-
-export const lambdaHandler = async (
-  event: APIGatewayProxyEvent,
-  context: Context
-): Promise<APIGatewayProxyResult> => {
-  try {
-    const method = event.httpMethod;
-    const path = event.path;
-
-    // ========== ENDPOINT: POST /CreateCustomer ========== ⭐ NUEVO
-    if (method === 'POST' && path === '/CreateCustomer') {
-      // Parse body
-      const body = JSON.parse(event.body || '{}');
-
-      // Dependency Injection
-      const controller = new CustomerController(
-        new CustomerBL(
-          new CustomerRepository()
-        )
-      );
-
-      // Ejecutar
-      const response = await controller.createCustomer(body);
-
-      // Agregar CORS headers
-      return {
-        ...response,
-        headers: ALLOWED_HEADERS_VALUES
-      };
-    }
-
-    // ========== ENDPOINT: GET /InfoEmojis ==========
-    if (method === 'GET' && path === '/InfoEmojis') {
-      const { customerId } = event.queryStringParameters || {};
-
-      const controller = new EmojisController(
-        new EmojisBL(
-          new ListEmojisRepository()
-        )
-      );
-
-      const response = await controller.getListEmojis(Number(customerId));
-
-      return {
-        ...response,
-        headers: ALLOWED_HEADERS_VALUES
-      };
-    }
-
-    // ========== ENDPOINT: POST /InfoEmojis ==========
-    if (method === 'POST' && path === '/InfoEmojis') {
-      const body = JSON.parse(event.body || '{}');
-
-      const controller = new EmojisController(
-        new EmojisBL(
-          new ListEmojisRepository()
-        )
-      );
-
-      const response = await controller.listEmojisByCustomer(body);
-
-      return {
-        ...response,
-        headers: ALLOWED_HEADERS_VALUES
-      };
-    }
-
-    // No se encontró el endpoint
-    return ResponseWriter.objectResponse(
-      404,
-      { error: 'Endpoint not found' }
+    const result = await mysqlClient.query(
+      QUERIES.CREATE_MONEDA,
+      [data.codigoIso, data.nombre, data.simbolo, decimales, activo]
     );
 
-  } catch (error) {
-    console.error('Lambda Handler Error:', error);
+    return result.rows[0] as MonedaDTO;
+  }
+
+  async getMonedaById(monedaId: number): Promise<MonedaDTO | null> {
+    const result = await mysqlClient.query(
+      QUERIES.GET_MONEDA_BY_ID,
+      [monedaId]
+    );
+
+    return result.rows.length > 0 ? result.rows[0] as MonedaDTO : null;
+  }
+
+  async listMonedasPaginated(
+    pagination: PaginationParams
+  ): Promise<PaginatedResult<MonedaDTO>> {
+    const offset = (pagination.pageNumber - 1) * pagination.pageSize;
+
+    // Total de registros
+    const countResult = await mysqlClient.query(QUERIES.COUNT_MONEDAS);
+    const totalRecords = parseInt(countResult.rows[0]?.total || '0');
+
+    // Datos paginados
+    const dataResult = await mysqlClient.query(
+      QUERIES.LIST_MONEDAS_PAGINATED,
+      [pagination.pageSize, offset]
+    );
 
     return {
-      statusCode: HttpStatus.SERVICE_UNAVAILABLE,
-      headers: ALLOWED_HEADERS_VALUES,
-      body: JSON.stringify({ error: 'Service unavailable' })
+      data: dataResult.rows as MonedaDTO[],
+      totalRecords
     };
   }
-};
+
+  async updateMoneda(
+    monedaId: number,
+    data: MonedaRequestDTO
+  ): Promise<MonedaDTO | null> {
+    const decimales = data.decimales ?? 2;
+    const activo = data.activo ?? true;
+
+    const result = await mysqlClient.query(
+      QUERIES.UPDATE_MONEDA,
+      [data.codigoIso, data.nombre, data.simbolo, decimales, activo, monedaId]
+    );
+
+    return result.rows.length > 0 ? result.rows[0] as MonedaDTO : null;
+  }
+
+  async deleteMoneda(monedaId: number): Promise<MonedaDTO | null> {
+    const result = await mysqlClient.query(
+      QUERIES.DELETE_MONEDA,
+      [monedaId]
+    );
+
+    return result.rows.length > 0 ? result.rows[0] as MonedaDTO : null;
+  }
+
+  async checkMonedaExistsByIso(
+    codigoIso: string,
+    excludeId: number = 0
+  ): Promise<boolean> {
+    const result = await mysqlClient.query(
+      QUERIES.CHECK_MONEDA_EXISTS_BY_ISO,
+      [codigoIso, excludeId]
+    );
+
+    const count = parseInt(result.rows[0]?.count || '0');
+    return count > 0;
+  }
+}
 ```
 
 ---
 
-### 🔧 PASO 9: Actualizar template.yaml
+#### 🔧 PASO 4: Crear Modelo de Dominio y Mapper
 
-**Archivo:** `template.yaml`
+**Archivo:** `src/domain/models/MonedaDomain.ts`
 
-```yaml
-AWSTemplateFormatVersion: '2010-09-09'
-Transform: AWS::Serverless-2016-10-31
-Description: Lambda para gestión de emojis y clientes
+```typescript
+// Modelo de dominio (camelCase)
+export interface Moneda {
+  monedaId: number;
+  codigoIso: string;
+  nombre: string;
+  simbolo: string;
+  decimales: number;
+  activo: boolean;
+}
 
-Resources:
-  # Lambda existente
-  InfoEmojis:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: src/
-      Handler: app.lambdaHandler
-      Runtime: nodejs20.x
-      Architecture: arm64
-      MemorySize: 128
-      Timeout: 3
-      Environment:
-        Variables:
-          password: admin1234*
-          url: db-game.c1g6mycog0un.me-south-1.rds.amazonaws.com
-          user: admin
-      Events:
-        GetEmojis:
-          Type: Api
-          Properties:
-            Path: /InfoEmojis
-            Method: GET
-        PostEmojis:
-          Type: Api
-          Properties:
-            Path: /InfoEmojis
-            Method: POST
-        CreateCustomer:  # ⭐ NUEVO ENDPOINT
-          Type: Api
-          Properties:
-            Path: /CreateCustomer
-            Method: POST
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: true
-        Target: es2020
-        EntryPoints: [app.ts]
+// Parámetros de paginación
+export interface PaginationParams {
+  pageNumber: number;  // Inicia en 1
+  pageSize: number;    // Máximo 500
+}
 
-Outputs:
-  ApiUrl:
-    Description: "API Gateway endpoint URL"
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+// Respuesta de paginación
+export interface PaginationResponse {
+  totalElement: number;
+  pageSize: number;
+  pageNumber: number;
+  hasMoreElements: boolean;
+}
+
+// Respuesta para listado con paginación
+export interface MonedaListData {
+  monedas: Moneda[];
+  pagination: PaginationResponse;
+}
 ```
 
-**Nota:** Como estamos usando la misma función Lambda para múltiples endpoints, solo agregamos el nuevo evento `CreateCustomer` a la función existente.
+**Archivo:** `src/domain/mappers/MonedaMapper.ts`
+
+```typescript
+import { MonedaDTO } from '../../repositories/dtos/MonedaDTO';
+import { Moneda } from '../models/MonedaDomain';
+
+export class MonedaMapper {
+
+  /**
+   * Convertir DTO de BD (snake_case) a Modelo de Dominio (camelCase)
+   */
+  static toDomain(dto: MonedaDTO): Moneda {
+    return {
+      monedaId: dto.moneda_id,
+      codigoIso: dto.codigo_iso,
+      nombre: dto.nombre,
+      simbolo: dto.simbolo,
+      decimales: dto.decimales,
+      activo: dto.activo
+    };
+  }
+
+  /**
+   * Convertir lista de DTOs a lista de modelos de dominio
+   */
+  static toDomainList(dtos: MonedaDTO[]): Moneda[] {
+    return dtos.map(dto => this.toDomain(dto));
+  }
+}
+```
 
 ---
 
-### 📦 PASO 10: Build y Deploy
+#### 🔧 PASO 5: Implementar Business Logic
 
-```bash
-# 1. Build del proyecto
-sam build
+**Archivo:** `src/domain/IMonedaBL.ts`
 
-# 2. Deploy
-sam deploy
+```typescript
+import { MonedaRequestDTO } from '../repositories/dtos/MonedaDTO';
+import { Moneda, MonedaListData, PaginationParams } from './models/MonedaDomain';
+
+export interface IMonedaBL {
+  createMoneda(data: MonedaRequestDTO): Promise<Moneda>;
+  getMonedaById(monedaId: number): Promise<Moneda>;
+  listMonedasPaginated(pagination: PaginationParams): Promise<MonedaListData>;
+  updateMoneda(monedaId: number, data: MonedaRequestDTO): Promise<Moneda>;
+  deleteMoneda(monedaId: number): Promise<Moneda>;
+}
 ```
 
-**Output esperado:**
-```
-Successfully created/updated stack - sam-app in me-south-1
+**Archivo:** `src/domain/MonedaBL.ts`
 
-Stack Outputs:
-  ApiUrl: https://abc123xyz.execute-api.me-south-1.amazonaws.com/Prod/
+```typescript
+import { IMonedaBL } from './IMonedaBL';
+import { IMonedaRepository } from '../repositories/IMonedaRepository';
+import { MonedaRequestDTO } from '../repositories/dtos/MonedaDTO';
+import { Moneda, MonedaListData, PaginationParams } from './models/MonedaDomain';
+import { MonedaMapper } from './mappers/MonedaMapper';
+
+// Excepciones personalizadas
+export class ValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ValidationError';
+  }
+}
+
+export class NotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NotFoundError';
+  }
+}
+
+export class ConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConflictError';
+  }
+}
+
+export class MonedaBL implements IMonedaBL {
+
+  constructor(private monedaRepository: IMonedaRepository) {}
+
+  /**
+   * Crear nueva moneda
+   */
+  async createMoneda(data: MonedaRequestDTO): Promise<Moneda> {
+    // 1. Validar datos de entrada
+    this.validateMonedaData(data);
+
+    // 2. Verificar que no exista código ISO duplicado
+    const exists = await this.monedaRepository.checkMonedaExistsByIso(
+      data.codigoIso
+    );
+
+    if (exists) {
+      throw new ConflictError(
+        `Ya existe una moneda con el código ISO: ${data.codigoIso}`
+      );
+    }
+
+    // 3. Crear en BD
+    const monedaDTO = await this.monedaRepository.createMoneda(data);
+
+    // 4. Transformar a modelo de dominio
+    return MonedaMapper.toDomain(monedaDTO);
+  }
+
+  /**
+   * Obtener moneda por ID
+   */
+  async getMonedaById(monedaId: number): Promise<Moneda> {
+    if (!monedaId || monedaId <= 0) {
+      throw new ValidationError('El monedaId debe ser un número positivo');
+    }
+
+    const monedaDTO = await this.monedaRepository.getMonedaById(monedaId);
+
+    if (!monedaDTO) {
+      throw new NotFoundError(`Moneda con ID ${monedaId} no encontrada`);
+    }
+
+    return MonedaMapper.toDomain(monedaDTO);
+  }
+
+  /**
+   * Listar monedas con paginación
+   */
+  async listMonedasPaginated(
+    pagination: PaginationParams
+  ): Promise<MonedaListData> {
+    // Validar parámetros de paginación
+    this.validatePaginationParams(pagination);
+
+    // Obtener datos del repositorio
+    const result = await this.monedaRepository.listMonedasPaginated(pagination);
+
+    // Transformar a modelos de dominio
+    const monedas = MonedaMapper.toDomainList(result.data);
+
+    // Calcular si hay más elementos
+    const totalPages = Math.ceil(result.totalRecords / pagination.pageSize);
+    const hasMoreElements = pagination.pageNumber < totalPages;
+
+    return {
+      monedas,
+      pagination: {
+        totalElement: result.totalRecords,
+        pageSize: pagination.pageSize,
+        pageNumber: pagination.pageNumber,
+        hasMoreElements
+      }
+    };
+  }
+
+  /**
+   * Actualizar moneda
+   */
+  async updateMoneda(
+    monedaId: number,
+    data: MonedaRequestDTO
+  ): Promise<Moneda> {
+    if (!monedaId || monedaId <= 0) {
+      throw new ValidationError('El monedaId debe ser un número positivo');
+    }
+
+    this.validateMonedaData(data);
+
+    // Verificar que existe
+    const existingMoneda = await this.monedaRepository.getMonedaById(monedaId);
+    if (!existingMoneda) {
+      throw new NotFoundError(`Moneda con ID ${monedaId} no encontrada`);
+    }
+
+    // Verificar que no haya otro con el mismo código ISO
+    const exists = await this.monedaRepository.checkMonedaExistsByIso(
+      data.codigoIso,
+      monedaId
+    );
+
+    if (exists) {
+      throw new ConflictError(
+        `Ya existe otra moneda con el código ISO: ${data.codigoIso}`
+      );
+    }
+
+    const monedaDTO = await this.monedaRepository.updateMoneda(monedaId, data);
+
+    if (!monedaDTO) {
+      throw new NotFoundError(`No se pudo actualizar moneda con ID ${monedaId}`);
+    }
+
+    return MonedaMapper.toDomain(monedaDTO);
+  }
+
+  /**
+   * Eliminar moneda
+   */
+  async deleteMoneda(monedaId: number): Promise<Moneda> {
+    if (!monedaId || monedaId <= 0) {
+      throw new ValidationError('El monedaId debe ser un número positivo');
+    }
+
+    const monedaDTO = await this.monedaRepository.deleteMoneda(monedaId);
+
+    if (!monedaDTO) {
+      throw new NotFoundError(`Moneda con ID ${monedaId} no encontrada`);
+    }
+
+    return MonedaMapper.toDomain(monedaDTO);
+  }
+
+  /**
+   * Validar datos de moneda
+   */
+  private validateMonedaData(data: MonedaRequestDTO): void {
+    // Validar código ISO
+    if (!data.codigoIso || data.codigoIso.trim().length === 0) {
+      throw new ValidationError('El campo codigoIso es requerido');
+    }
+
+    if (data.codigoIso.length !== 3) {
+      throw new ValidationError(
+        'El codigoIso debe tener exactamente 3 caracteres (ej: COP, USD, EUR)'
+      );
+    }
+
+    const codigoIsoUpper = data.codigoIso.toUpperCase();
+    if (!/^[A-Z]{3}$/.test(codigoIsoUpper)) {
+      throw new ValidationError(
+        'El codigoIso debe contener solo letras (ej: COP, USD, EUR)'
+      );
+    }
+
+    data.codigoIso = codigoIsoUpper;
+
+    // Validar nombre
+    if (!data.nombre || data.nombre.trim().length === 0) {
+      throw new ValidationError('El campo nombre es requerido');
+    }
+
+    if (data.nombre.length > 50) {
+      throw new ValidationError('El nombre no puede exceder 50 caracteres');
+    }
+
+    // Validar símbolo
+    if (!data.simbolo || data.simbolo.trim().length === 0) {
+      throw new ValidationError('El campo simbolo es requerido');
+    }
+
+    if (data.simbolo.length > 10) {
+      throw new ValidationError('El simbolo no puede exceder 10 caracteres');
+    }
+
+    // Validar decimales
+    if (data.decimales !== undefined) {
+      if (data.decimales < 0 || data.decimales > 10) {
+        throw new ValidationError('El campo decimales debe estar entre 0 y 10');
+      }
+    }
+
+    // Validar activo
+    if (data.activo !== undefined && typeof data.activo !== 'boolean') {
+      throw new ValidationError(
+        'El campo activo debe ser un valor booleano (true o false)'
+      );
+    }
+  }
+
+  /**
+   * Validar parámetros de paginación
+   */
+  private validatePaginationParams(pagination: PaginationParams): void {
+    if (!Number.isInteger(pagination.pageNumber) || pagination.pageNumber < 1) {
+      throw new ValidationError(
+        'El parámetro pageNumber debe ser un entero mayor o igual a 1'
+      );
+    }
+
+    if (!Number.isInteger(pagination.pageSize) || pagination.pageSize < 1) {
+      throw new ValidationError(
+        'El parámetro pageSize debe ser un entero mayor o igual a 1'
+      );
+    }
+
+    if (pagination.pageSize > 500) {
+      throw new ValidationError(
+        'El parámetro pageSize no puede ser mayor a 500'
+      );
+    }
+  }
+}
+```
+
+---
+
+#### 🔧 PASO 6: Implementar Controller
+
+**Archivo:** `src/controller/IMonedaController.ts`
+
+```typescript
+import { APIGatewayProxyResult } from 'aws-lambda';
+import { MonedaRequestDTO } from '../repositories/dtos/MonedaDTO';
+import { PaginationParams } from '../domain/models/MonedaDomain';
+
+export interface IMonedaController {
+  createMoneda(
+    data: MonedaRequestDTO,
+    messageUuid: string,
+    requestAppId: string
+  ): Promise<APIGatewayProxyResult>;
+
+  getMonedaById(
+    monedaId: number,
+    messageUuid: string,
+    requestAppId: string
+  ): Promise<APIGatewayProxyResult>;
+
+  listMonedas(
+    pagination: PaginationParams,
+    messageUuid: string,
+    requestAppId: string
+  ): Promise<APIGatewayProxyResult>;
+
+  updateMoneda(
+    monedaId: number,
+    data: MonedaRequestDTO,
+    messageUuid: string,
+    requestAppId: string
+  ): Promise<APIGatewayProxyResult>;
+
+  deleteMoneda(
+    monedaId: number,
+    messageUuid: string,
+    requestAppId: string
+  ): Promise<APIGatewayProxyResult>;
+}
+```
+
+**Archivo:** `src/controller/MonedaController.ts`
+
+```typescript
+import { APIGatewayProxyResult } from 'aws-lambda';
+import { IMonedaController } from './IMonedaController';
+import { IMonedaBL } from '../domain/IMonedaBL';
+import { MonedaRequestDTO } from '../repositories/dtos/MonedaDTO';
+import { SwaggerResponseBuilder } from '../core/common/SwaggerResponseBuilder';
+import { ValidationError, NotFoundError, ConflictError } from '../domain/MonedaBL';
+import { ALLOWED_HEADERS_VALUES } from '../core/utils/Constans';
+import { PaginationParams } from '../domain/models/MonedaDomain';
+
+export class MonedaController implements IMonedaController {
+
+  constructor(private monedaBL: IMonedaBL) {}
+
+  /**
+   * POST /v1/pos/monedas - Crear moneda
+   */
+  async createMoneda(
+    data: MonedaRequestDTO,
+    messageUuid: string,
+    requestAppId: string
+  ): Promise<APIGatewayProxyResult> {
+    try {
+      const moneda = await this.monedaBL.createMoneda(data);
+
+      const response = SwaggerResponseBuilder.buildSuccessResponse(
+        201,
+        moneda,
+        messageUuid,
+        requestAppId,
+        '0000',
+        'Success',
+        'Resource created successfully'
+      );
+
+      return {
+        statusCode: 201,
+        headers: this.getCorsHeaders(),
+        body: JSON.stringify(response)
+      };
+
+    } catch (error: any) {
+      return this.handleError(error, messageUuid, requestAppId);
+    }
+  }
+
+  /**
+   * GET /v1/pos/monedas/{monedaId} - Obtener por ID
+   */
+  async getMonedaById(
+    monedaId: number,
+    messageUuid: string,
+    requestAppId: string
+  ): Promise<APIGatewayProxyResult> {
+    try {
+      const moneda = await this.monedaBL.getMonedaById(monedaId);
+
+      const response = SwaggerResponseBuilder.buildSuccessResponse(
+        200,
+        moneda,
+        messageUuid,
+        requestAppId
+      );
+
+      return {
+        statusCode: 200,
+        headers: this.getCorsHeaders(),
+        body: JSON.stringify(response)
+      };
+
+    } catch (error: any) {
+      return this.handleError(error, messageUuid, requestAppId);
+    }
+  }
+
+  /**
+   * GET /v1/pos/monedas - Listar con paginación
+   */
+  async listMonedas(
+    pagination: PaginationParams,
+    messageUuid: string,
+    requestAppId: string
+  ): Promise<APIGatewayProxyResult> {
+    try {
+      const data = await this.monedaBL.listMonedasPaginated(pagination);
+
+      const response = SwaggerResponseBuilder.buildSuccessResponse(
+        200,
+        data,
+        messageUuid,
+        requestAppId
+      );
+
+      return {
+        statusCode: 200,
+        headers: this.getCorsHeaders(),
+        body: JSON.stringify(response)
+      };
+
+    } catch (error: any) {
+      return this.handleError(error, messageUuid, requestAppId);
+    }
+  }
+
+  /**
+   * PUT /v1/pos/monedas/{monedaId} - Actualizar
+   */
+  async updateMoneda(
+    monedaId: number,
+    data: MonedaRequestDTO,
+    messageUuid: string,
+    requestAppId: string
+  ): Promise<APIGatewayProxyResult> {
+    try {
+      const moneda = await this.monedaBL.updateMoneda(monedaId, data);
+
+      const response = SwaggerResponseBuilder.buildSuccessResponse(
+        200,
+        moneda,
+        messageUuid,
+        requestAppId
+      );
+
+      return {
+        statusCode: 200,
+        headers: this.getCorsHeaders(),
+        body: JSON.stringify(response)
+      };
+
+    } catch (error: any) {
+      return this.handleError(error, messageUuid, requestAppId);
+    }
+  }
+
+  /**
+   * DELETE /v1/pos/monedas/{monedaId} - Eliminar
+   */
+  async deleteMoneda(
+    monedaId: number,
+    messageUuid: string,
+    requestAppId: string
+  ): Promise<APIGatewayProxyResult> {
+    try {
+      const moneda = await this.monedaBL.deleteMoneda(monedaId);
+
+      const response = SwaggerResponseBuilder.buildSuccessResponse(
+        200,
+        moneda,
+        messageUuid,
+        requestAppId,
+        '0000',
+        'Success',
+        'Resource deleted successfully'
+      );
+
+      return {
+        statusCode: 200,
+        headers: this.getCorsHeaders(),
+        body: JSON.stringify(response)
+      };
+
+    } catch (error: any) {
+      return this.handleError(error, messageUuid, requestAppId);
+    }
+  }
+
+  /**
+   * Manejo centralizado de errores
+   */
+  private handleError(
+    error: any,
+    messageUuid: string,
+    requestAppId: string
+  ): APIGatewayProxyResult {
+    console.error('Error in MonedaController:', error);
+
+    // ValidationError → 400 BAD REQUEST
+    if (error instanceof ValidationError) {
+      const errors = [
+        SwaggerResponseBuilder.buildErrorItem('E001', error.message)
+      ];
+
+      const response = SwaggerResponseBuilder.buildErrorResponse(
+        400,
+        errors,
+        messageUuid,
+        requestAppId
+      );
+
+      return {
+        statusCode: 400,
+        headers: this.getCorsHeaders(),
+        body: JSON.stringify(response)
+      };
+    }
+
+    // NotFoundError → 404 NOT FOUND
+    if (error instanceof NotFoundError) {
+      const errors = [
+        SwaggerResponseBuilder.buildErrorItem('E002', error.message)
+      ];
+
+      const response = SwaggerResponseBuilder.buildErrorResponse(
+        404,
+        errors,
+        messageUuid,
+        requestAppId
+      );
+
+      return {
+        statusCode: 404,
+        headers: this.getCorsHeaders(),
+        body: JSON.stringify(response)
+      };
+    }
+
+    // ConflictError → 409 CONFLICT
+    if (error instanceof ConflictError) {
+      const errors = [
+        SwaggerResponseBuilder.buildErrorItem('E003', error.message)
+      ];
+
+      const response = SwaggerResponseBuilder.buildErrorResponse(
+        409,
+        errors,
+        messageUuid,
+        requestAppId
+      );
+
+      return {
+        statusCode: 409,
+        headers: this.getCorsHeaders(),
+        body: JSON.stringify(response)
+      };
+    }
+
+    // Error genérico → 500 INTERNAL SERVER ERROR
+    const errors = [
+      SwaggerResponseBuilder.buildErrorItem(
+        'E999',
+        'Internal server error'
+      )
+    ];
+
+    const response = SwaggerResponseBuilder.buildErrorResponse(
+      500,
+      errors,
+      messageUuid,
+      requestAppId
+    );
+
+    return {
+      statusCode: 500,
+      headers: this.getCorsHeaders(),
+      body: JSON.stringify(response)
+    };
+  }
+
+  /**
+   * Obtener headers CORS
+   */
+  private getCorsHeaders(): Record<string, string> {
+    return {
+      'Content-Type': ALLOWED_HEADERS_VALUES.CONTENT_TYPE,
+      'Access-Control-Allow-Headers': ALLOWED_HEADERS_VALUES.ALLOWED_HEADERS,
+      'Access-Control-Allow-Origin': ALLOWED_HEADERS_VALUES.ALLOW_ORIGIN,
+      'Access-Control-Allow-Methods': ALLOWED_HEADERS_VALUES.ALLOWED_METHODS
+    };
+  }
+}
 ```
 
 ---
 
 ## Guía de Testing con SAM CLI
 
-### 🧪 Opción 1: Testing Local con `sam local invoke`
+### Opción 1: Testing Local con `sam local invoke`
 
-#### Crear archivo de evento de prueba
+#### 1. Crear archivo de evento de prueba
 
-**Archivo:** `events/create-customer-event.json`
+**Archivo:** `events/create-moneda-event.json`
 
 ```json
 {
   "httpMethod": "POST",
-  "path": "/CreateCustomer",
-  "headers": {
-    "Content-Type": "application/json"
-  },
-  "body": "{\"name\":\"Juan Pérez\",\"email\":\"juan@example.com\",\"phone\":\"+1234567890\"}",
-  "queryStringParameters": null,
-  "pathParameters": null,
-  "requestContext": {
-    "requestId": "test-request-id"
-  }
-}
-```
-
-#### Ejecutar prueba local
-
-```bash
-# Build primero
-sam build
-
-# Invocar lambda localmente con el evento
-sam local invoke InfoEmojis -e events/create-customer-event.json
-```
-
-**Output esperado:**
-```json
-{
-  "statusCode": 201,
+  "path": "/v1/pos/monedas",
   "headers": {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-    ...
+    "message-uuid": "550e8400-e29b-41d4-a716-446655440000",
+    "request-app-id": "POS-ATENEA"
   },
-  "body": "{\"data\":{\"customerId\":123,\"name\":\"Juan Pérez\",\"email\":\"juan@example.com\",\"phone\":\"+1234567890\",\"createdAt\":\"2026-01-07T10:30:00Z\",\"displayName\":\"Juan P.\"},\"operation\":{\"statusCode\":201,\"status\":\"Success\",\"message\":\"Customer created successfully\"}}"
+  "body": "{\"codigoIso\":\"COP\",\"nombre\":\"Peso Colombiano\",\"simbolo\":\"$\",\"decimales\":2}",
+  "queryStringParameters": null,
+  "pathParameters": null
 }
 ```
 
----
-
-### 🧪 Opción 2: Testing con API Local (`sam local start-api`)
-
-#### Iniciar API local
+#### 2. Ejecutar prueba local
 
 ```bash
 # Build
 sam build
 
-# Iniciar API Gateway local en puerto 3000
+# Invocar lambda localmente
+sam local invoke MonedasFunction -e events/create-moneda-event.json
+```
+
+### Opción 2: Testing con API Local (`sam local start-api`)
+
+#### 1. Iniciar API local
+
+```bash
+sam build
 sam local start-api --port 3000
 ```
 
-**Output:**
+Output:
 ```
-Mounting InfoEmojis at http://127.0.0.1:3000/CreateCustomer [POST]
-Mounting InfoEmojis at http://127.0.0.1:3000/InfoEmojis [GET]
-Mounting InfoEmojis at http://127.0.0.1:3000/InfoEmojis [POST]
+Mounting MonedasFunction at http://127.0.0.1:3000/v1/pos/monedas [POST]
+Mounting MonedasFunction at http://127.0.0.1:3000/v1/pos/monedas [GET]
+Mounting MonedasFunction at http://127.0.0.1:3000/v1/pos/monedas/{monedaId} [GET]
+Mounting MonedasFunction at http://127.0.0.1:3000/v1/pos/monedas/{monedaId} [PUT]
+Mounting MonedasFunction at http://127.0.0.1:3000/v1/pos/monedas/{monedaId} [DELETE]
 ```
 
-#### Probar con curl
+#### 2. Probar con curl
 
-**Test 1: Crear cliente válido**
+**Test 1: Crear moneda**
 ```bash
-curl -X POST http://127.0.0.1:3000/CreateCustomer \
+curl -X POST http://127.0.0.1:3000/v1/pos/monedas \
   -H "Content-Type: application/json" \
+  -H "message-uuid: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "request-app-id: POS-ATENEA" \
   -d '{
-    "name": "Juan Pérez",
-    "email": "juan@example.com",
-    "phone": "+1234567890"
+    "codigoIso": "COP",
+    "nombre": "Peso Colombiano",
+    "simbolo": "$",
+    "decimales": 2
   }'
 ```
 
-**Respuesta esperada:**
-```json
-{
-  "data": {
-    "customerId": 123,
-    "name": "Juan Pérez",
-    "email": "juan@example.com",
-    "phone": "+1234567890",
-    "createdAt": "2026-01-07T10:30:00Z",
-    "displayName": "Juan P."
-  },
-  "operation": {
-    "statusCode": 201,
-    "status": "Success",
-    "message": "Customer created successfully"
-  }
-}
+**Test 2: Listar monedas con paginación**
+```bash
+curl "http://127.0.0.1:3000/v1/pos/monedas?pageNumber=1&pageSize=10" \
+  -H "message-uuid: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "request-app-id: POS-ATENEA"
 ```
 
----
-
-**Test 2: Email inválido (debe fallar con 400)**
+**Test 3: Obtener moneda por ID**
 ```bash
-curl -X POST http://127.0.0.1:3000/CreateCustomer \
+curl http://127.0.0.1:3000/v1/pos/monedas/1 \
+  -H "message-uuid: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "request-app-id: POS-ATENEA"
+```
+
+**Test 4: Actualizar moneda**
+```bash
+curl -X PUT http://127.0.0.1:3000/v1/pos/monedas/1 \
   -H "Content-Type: application/json" \
+  -H "message-uuid: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "request-app-id: POS-ATENEA" \
   -d '{
-    "name": "Juan Pérez",
-    "email": "invalid-email",
-    "phone": "+1234567890"
+    "codigoIso": "COP",
+    "nombre": "Peso Colombiano Actualizado",
+    "simbolo": "$",
+    "decimales": 2,
+    "activo": true
   }'
 ```
 
-**Respuesta esperada:**
-```json
-{
-  "error": "Valid email is required",
-  "operation": {
-    "statusCode": 400,
-    "status": "Error",
-    "message": "Validation failed"
-  }
-}
-```
-
----
-
-**Test 3: Nombre vacío (debe fallar con 400)**
+**Test 5: Eliminar moneda**
 ```bash
-curl -X POST http://127.0.0.1:3000/CreateCustomer \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "",
-    "email": "juan@example.com",
-    "phone": "+1234567890"
-  }'
+curl -X DELETE http://127.0.0.1:3000/v1/pos/monedas/1 \
+  -H "message-uuid: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "request-app-id: POS-ATENEA"
 ```
 
----
+### Opción 3: Testing en AWS (Deployed)
 
-#### Probar con Postman
-
-1. **URL:** `http://127.0.0.1:3000/CreateCustomer`
-2. **Method:** POST
-3. **Headers:**
-   - `Content-Type: application/json`
-4. **Body (raw JSON):**
-```json
-{
-  "name": "María García",
-  "email": "maria@example.com",
-  "phone": "+9876543210"
-}
-```
-
----
-
-### 🧪 Opción 3: Testing en AWS (Deployed)
-
-#### Ver URL de la API desplegada
+#### 1. Deploy
 
 ```bash
-# Obtener outputs del stack
+sam build
+sam deploy
+```
+
+#### 2. Obtener URL de la API
+
+```bash
 aws cloudformation describe-stacks \
-  --stack-name sam-app \
-  --region me-south-1 \
+  --stack-name lambda-ateneapos-moneda \
+  --region us-east-1 \
   --query 'Stacks[0].Outputs' \
   --output table
 ```
 
-**Output:**
-```
----------------------------------------------------------
-|                    DescribeStacks                     |
-+-------------+-----------------------------------------+
-| OutputKey   | ApiUrl                                  |
-| OutputValue | https://abc123.execute-api.me-south... |
-+-------------+-----------------------------------------+
-```
-
-#### Probar endpoint desplegado
+#### 3. Probar endpoint desplegado
 
 ```bash
-# URL completa
-export API_URL="https://abc123xyz.execute-api.me-south-1.amazonaws.com/Prod"
+export API_URL="https://YOUR-API-ID.execute-api.us-east-1.amazonaws.com/Prod"
 
-# Crear cliente
-curl -X POST ${API_URL}/CreateCustomer \
+curl -X POST ${API_URL}/v1/pos/monedas \
   -H "Content-Type: application/json" \
+  -H "message-uuid: 550e8400-e29b-41d4-a716-446655440000" \
+  -H "request-app-id: POS-ATENEA" \
   -d '{
-    "name": "Cliente de Producción",
-    "email": "prod@example.com",
-    "phone": "+1111111111"
+    "codigoIso": "USD",
+    "nombre": "Dólar Americano",
+    "simbolo": "$",
+    "decimales": 2
   }'
 ```
 
----
-
-### 🧪 Opción 4: Ver Logs en CloudWatch
-
-#### Ver logs en tiempo real (durante deploy)
+### Opción 4: Ver Logs en CloudWatch
 
 ```bash
-sam logs -n InfoEmojis \
-  --stack-name sam-app \
-  --region me-south-1 \
-  --tail
-```
+# Ver logs en tiempo real
+sam logs -n MonedasFunction --stack-name lambda-ateneapos-moneda --tail
 
-#### Ver logs de una invocación específica
+# Ver logs de últimos 10 minutos
+sam logs -n MonedasFunction --stack-name lambda-ateneapos-moneda --start-time '10min ago'
 
-```bash
-# Ver últimos 10 minutos
-sam logs -n InfoEmojis \
-  --stack-name sam-app \
-  --region me-south-1 \
-  --start-time '10min ago'
-```
-
-#### Ver logs con filtro
-
-```bash
-# Solo errores
-sam logs -n InfoEmojis \
-  --stack-name sam-app \
-  --region me-south-1 \
-  --filter 'ERROR'
+# Filtrar solo errores
+sam logs -n MonedasFunction --stack-name lambda-ateneapos-moneda --filter 'ERROR'
 ```
 
 ---
 
-### 🧪 Scripts de Testing (package.json)
-
-Agrega estos scripts para facilitar testing:
-
-**Archivo:** `package.json`
-
-```json
-{
-  "name": "lambda-moneda",
-  "version": "1.0.0",
-  "scripts": {
-    "build": "sam build",
-    "deploy": "sam deploy",
-    "local:api": "sam build && sam local start-api --port 3000",
-    "local:invoke": "sam build && sam local invoke InfoEmojis -e events/create-customer-event.json",
-    "logs": "sam logs -n InfoEmojis --stack-name sam-app --region me-south-1 --tail",
-    "test:create-customer": "curl -X POST http://127.0.0.1:3000/CreateCustomer -H 'Content-Type: application/json' -d @events/create-customer-body.json"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.2"
-  }
-}
-```
-
-**Uso:**
-```bash
-# Iniciar API local
-npm run local:api
-
-# Invocar lambda localmente
-npm run local:invoke
-
-# Ver logs
-npm run logs
-
-# Test rápido
-npm run test:create-customer
-```
-
----
-
-### 🧪 Archivo de datos de prueba
-
-**Archivo:** `events/create-customer-body.json`
-
-```json
-{
-  "name": "Test User",
-  "email": "test@example.com",
-  "phone": "+5551234567"
-}
-```
-
----
-
-## Estructura de Archivos (Resumen)
+## Estructura de Archivos
 
 ```
 lambdaMoneda/
 │
 ├── src/
-│   ├── app.ts                                    # ⭐ Lambda Handler (modificado)
+│   ├── app.ts                              # Lambda Handler principal
 │   │
 │   ├── controller/
-│   │   ├── CustomerController.ts                 # ⭐ NUEVO
-│   │   ├── ICustomerController.ts                # ⭐ NUEVO
-│   │   ├── EmojisController.ts
-│   │   └── IEmojisController.ts
+│   │   ├── MonedaController.ts
+│   │   └── IMonedaController.ts
 │   │
 │   ├── domain/
-│   │   ├── CustomerBL.ts                         # ⭐ NUEVO
-│   │   ├── ICustomerBL.ts                        # ⭐ NUEVO
-│   │   ├── EmojisBL.ts
-│   │   ├── IEmojisBL.ts
+│   │   ├── MonedaBL.ts                     # Lógica de negocio
+│   │   ├── IMonedaBL.ts
 │   │   ├── mappers/
-│   │   │   ├── CustomerMapper.ts                 # ⭐ NUEVO
-│   │   │   └── EmojisMapper.ts
+│   │   │   └── MonedaMapper.ts             # DTO → Domain
 │   │   └── models/
-│   │       ├── CustomerDomain.ts                 # ⭐ NUEVO
-│   │       ├── EmojisDomain.ts
-│   │       └── EmojisDomainCustomer.ts
+│   │       └── MonedaDomain.ts             # Modelos de dominio
 │   │
 │   ├── repositories/
-│   │   ├── CustomerRepository.ts                 # ⭐ NUEVO
-│   │   ├── ICustomerRepository.ts                # ⭐ NUEVO
-│   │   ├── ListEmojisRepository.ts
-│   │   ├── IListEmojisRepository.ts
+│   │   ├── MonedaRepository.ts             # Acceso a datos
+│   │   ├── IMonedaRepository.ts
 │   │   └── dtos/
-│   │       ├── CreateCustomerDTO.ts              # ⭐ NUEVO
-│   │       ├── ListEmojisDTO.ts
-│   │       └── ...
+│   │       └── MonedaDTO.ts                # DTOs de BD
 │   │
-│   └── core/
-│       ├── common/
-│       │   ├── Helper.ts
-│       │   ├── ResponseWriter.ts
-│       │   └── types.ts
-│       ├── config/
-│       │   └── index.ts
-│       └── utils/
-│           ├── Constans.ts                       # ⭐ MODIFICADO (agregar queries)
-│           └── DatabaseManager.ts
+│   ├── core/
+│   │   ├── common/
+│   │   │   ├── SwaggerResponseBuilder.ts   # Formato respuestas Swagger
+│   │   │   ├── swaggerTypes.ts
+│   │   │   ├── ResponseWriter.ts
+│   │   │   ├── Helper.ts
+│   │   │   ├── types.ts
+│   │   │   └── QueryFailException.ts
+│   │   ├── config/
+│   │   │   └── index.ts                    # Configuración por ambiente
+│   │   └── utils/
+│   │       ├── Constans.ts                 # Queries SQL y constantes
+│   │       └── DatabaseManager.ts          # Pool PostgreSQL
+│   │
+│   ├── package.json
+│   ├── package-lock.json
+│   └── tsconfig.json
 │
-├── events/                                        # ⭐ NUEVO (para testing)
-│   ├── create-customer-event.json                # ⭐ NUEVO
-│   └── create-customer-body.json                 # ⭐ NUEVO
+├── events/                                  # Eventos de prueba SAM
+│   ├── create-moneda-event.json
+│   ├── list-monedas-event.json
+│   └── get-moneda-event.json
 │
-├── template.yaml                                  # ⭐ MODIFICADO (agregar endpoint)
+├── template.yaml                            # SAM template (infraestructura)
 ├── samconfig.toml
-└── package.json                                   # ⭐ MODIFICADO (agregar scripts)
+├── package.json
+├── ARQUITECTURA.md                          # Este archivo
+├── TEST_COMMANDS.md
+├── CONFIGURACION_CORS.md
+└── GIT_WORKFLOW.md
 ```
 
 ---
 
 ## Checklist de Implementación
 
-### Para crear nueva lambda:
+### Para crear un nuevo endpoint:
 
 - [ ] **PASO 1:** Crear DTOs en `/repositories/dtos/`
-  - [ ] Request DTO
-  - [ ] Response DTO
+  - [ ] Request DTO (camelCase)
+  - [ ] Response DTO (snake_case)
 
 - [ ] **PASO 2:** Agregar queries en `Constans.ts`
-  - [ ] Query principal (INSERT/UPDATE/DELETE)
+  - [ ] Query principal con placeholders $1, $2...
   - [ ] Queries auxiliares si son necesarias
   - [ ] Agregar códigos HTTP si se necesitan nuevos
 
 - [ ] **PASO 3:** Implementar Repository
   - [ ] Crear interface `IXxxRepository.ts`
   - [ ] Implementar `XxxRepository.ts`
-  - [ ] Usar `try-finally` para liberar conexiones
-  - [ ] Usar prepared statements (`?`)
+  - [ ] Usar parametrización PostgreSQL ($1, $2...)
+  - [ ] Manejar resultado con `result.rows`
 
 - [ ] **PASO 4:** Crear modelos de dominio
-  - [ ] Definir interfaces en `/domain/models/`
+  - [ ] Definir interfaces en `/domain/models/` (camelCase)
   - [ ] Incluir campos calculados si hay lógica de negocio
 
-- [ ] **PASO 5:** Crear Mapper (si es necesario)
+- [ ] **PASO 5:** Crear Mapper
   - [ ] Implementar en `/domain/mappers/`
-  - [ ] Aplicar transformaciones DTO → Domain
+  - [ ] Convertir snake_case → camelCase
 
 - [ ] **PASO 6:** Implementar Business Logic
   - [ ] Crear interface `IXxxBL.ts`
   - [ ] Implementar `XxxBL.ts`
-  - [ ] Agregar validaciones de negocio
-  - [ ] Aplicar mappers
+  - [ ] Agregar validaciones de entrada
+  - [ ] Aplicar reglas de negocio
+  - [ ] Lanzar excepciones tipadas
 
 - [ ] **PASO 7:** Implementar Controller
   - [ ] Crear interface `IXxxController.ts`
   - [ ] Implementar `XxxController.ts`
+  - [ ] Usar SwaggerResponseBuilder
   - [ ] Manejar errores con try-catch
   - [ ] Retornar códigos HTTP apropiados
 
 - [ ] **PASO 8:** Integrar en `app.ts`
+  - [ ] Validar headers (message-uuid, request-app-id)
   - [ ] Agregar ruta (path + method)
   - [ ] Instanciar con DI
   - [ ] Agregar CORS headers
@@ -1240,11 +1646,41 @@ lambdaMoneda/
   - [ ] Verificar configuración de lambda
 
 - [ ] **PASO 10:** Testing
-  - [ ] Crear archivo de evento en `/events/`
+  - [ ] Crear archivos de evento en `/events/`
   - [ ] Probar con `sam local invoke`
   - [ ] Probar con `sam local start-api`
   - [ ] Deploy y probar en AWS
   - [ ] Verificar logs en CloudWatch
+
+---
+
+## Mejores Prácticas
+
+### Testing
+
+1. Siempre testear localmente antes de deploy
+2. Crear eventos de prueba para cada endpoint
+3. Testear casos de éxito y error
+4. Verificar logs en CloudWatch después de deploy
+5. Usar Postman/Insomnia para testing manual
+
+### Desarrollo
+
+1. Seguir el patrón de capas estrictamente
+2. Usar interfaces para todos los componentes
+3. Validar en Business Logic, no en Controller
+4. PostgreSQL: usar parametrización ($1, $2...) para evitar SQL injection
+5. Lanzar excepciones tipadas (ValidationError, NotFoundError, ConflictError)
+6. Usar SwaggerResponseBuilder para respuestas estandarizadas
+7. Agregar logs para debugging
+
+### Deployment
+
+1. Revisar template.yaml antes de deploy
+2. Verificar que credenciales no estén hardcodeadas
+3. Testear en LOCAL → Deploy a DEV → QA → PROD
+4. Monitorear logs después de deployment
+5. Hacer rollback si hay errores críticos
 
 ---
 
@@ -1266,135 +1702,47 @@ sam deploy
 sam validate
 
 # Ver configuración del stack
-sam list stack-outputs --stack-name sam-app
+sam list stack-outputs --stack-name lambda-ateneapos-moneda
 ```
 
 ### Testing Local
 
 ```bash
 # Invocar lambda con evento
-sam local invoke InfoEmojis -e events/create-customer-event.json
+sam local invoke MonedasFunction -e events/create-moneda-event.json
 
 # Iniciar API local
 sam local start-api --port 3000
 
 # Iniciar API con debug
 sam local start-api --port 3000 --debug
-
-# Invocar con variables de entorno custom
-sam local invoke -e events/test.json --env-vars env.json
 ```
 
 ### Logs
 
 ```bash
 # Ver logs en tiempo real
-sam logs -n InfoEmojis --stack-name sam-app --tail
+sam logs -n MonedasFunction --stack-name lambda-ateneapos-moneda --tail
 
 # Ver logs de últimos 10 minutos
-sam logs -n InfoEmojis --stack-name sam-app --start-time '10min ago'
+sam logs -n MonedasFunction --stack-name lambda-ateneapos-moneda --start-time '10min ago'
 
 # Filtrar logs
-sam logs -n InfoEmojis --stack-name sam-app --filter 'ERROR'
-
-# Exportar logs
-sam logs -n InfoEmojis --stack-name sam-app > logs.txt
+sam logs -n MonedasFunction --stack-name lambda-ateneapos-moneda --filter 'ERROR'
 ```
 
 ### Cleanup
 
 ```bash
 # Eliminar stack completo
-sam delete --stack-name sam-app --region me-south-1
+sam delete --stack-name lambda-ateneapos-moneda --region us-east-1
 
 # Sin confirmación
-sam delete --stack-name sam-app --region me-south-1 --no-prompts
+sam delete --stack-name lambda-ateneapos-moneda --region us-east-1 --no-prompts
 ```
-
----
-
-## Debugging Tips
-
-### Ver variables de entorno en lambda local
-
-```bash
-# Crear archivo env.json
-cat > env.json <<EOF
-{
-  "InfoEmojis": {
-    "NODE_ENVIRONMENT": "LOCAL",
-    "DEBUG": "true"
-  }
-}
-EOF
-
-# Usar en local invoke
-sam local invoke -e events/test.json --env-vars env.json
-```
-
-### Conectar a BD local para testing
-
-Modificar `src/core/config/index.ts`:
-
-```typescript
-export const config = {
-  NODE_ENVIRONMENT: process.env.NODE_ENVIRONMENT || 'LOCAL',
-  DATABASE: {
-    LOCAL: {
-      host: 'localhost',  // ⭐ MySQL local
-      database: 'db-game-local',
-      user: 'root',
-      password: 'root',
-      port: 3306
-    },
-    // ...
-  }
-};
-```
-
-### Ver logs de conexión MySQL
-
-Agregar logging en `DatabaseManager.ts`:
-
-```typescript
-export const mysqlClient = mysql.createPool({
-  ...config.DATABASE[config.NODE_ENVIRONMENT],
-  debug: process.env.DEBUG === 'true'  // ⭐ Ver queries SQL
-});
-```
-
----
-
-## Mejores Prácticas
-
-### ✅ Testing
-
-1. **Siempre testear localmente** antes de deploy
-2. **Crear eventos de prueba** para cada endpoint
-3. **Testear casos de error** (validaciones, BD down, etc.)
-4. **Verificar logs** en CloudWatch después de deploy
-5. **Usar Postman/Insomnia** para testing manual
-
-### ✅ Desarrollo
-
-1. **Seguir el patrón de capas** estrictamente
-2. **Usar interfaces** para todos los componentes
-3. **Validar en Business Logic**, no en Controller
-4. **Liberar conexiones** siempre con `try-finally`
-5. **Usar prepared statements** para evitar SQL injection
-6. **Manejar errores** apropiadamente en cada capa
-7. **Agregar logs** para debugging (`console.log`, `console.error`)
-
-### ✅ Deployment
-
-1. **Revisar template.yaml** antes de deploy
-2. **Verificar credenciales** no estén hardcodeadas
-3. **Testear en LOCAL** → **Deploy a DEV** → **QA** → **PROD**
-4. **Monitorear logs** después de deployment
-5. **Hacer rollback** si hay errores críticos
 
 ---
 
 **Fin del documento**
 
-Este documento te guía paso a paso para entender y desarrollar nuevas lambdas siguiendo la arquitectura establecida del proyecto.
+Este documento describe la arquitectura completa del proyecto Lambda Moneda para el Sistema POS Atenea, implementado con TypeScript, PostgreSQL y siguiendo principios de Clean Architecture.

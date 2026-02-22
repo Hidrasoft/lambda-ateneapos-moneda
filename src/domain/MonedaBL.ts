@@ -1,7 +1,7 @@
 import { IMonedaBL } from './IMonedaBL';
 import { IMonedaRepository } from '../repositories/IMonedaRepository';
 import { MonedaRequestDTO } from '../repositories/dtos/MonedaDTO';
-import { Moneda, MonedaListData, PaginationParams } from './models/MonedaDomain';
+import { Moneda, MonedaListData, MonedaListResult, PaginationParams } from './models/MonedaDomain';
 import { MonedaMapper } from './mappers/MonedaMapper';
 
 // Excepciones personalizadas
@@ -94,7 +94,7 @@ export class MonedaBL implements IMonedaBL {
   /**
    * Listar monedas con paginación
    */
-  async listMonedasPaginated(pagination: PaginationParams): Promise<MonedaListData> {
+  async listMonedasPaginated(pagination: PaginationParams): Promise<MonedaListResult> {
     // Validar parámetros de paginación
     this.validatePaginationParams(pagination);
 
@@ -109,7 +109,9 @@ export class MonedaBL implements IMonedaBL {
     const hasMoreElements = pagination.pageNumber < totalPages;
 
     return {
-      monedas,
+      data: {
+        monedas
+      },
       pagination: {
         totalElement: result.totalRecords,
         pageSize: pagination.pageSize,

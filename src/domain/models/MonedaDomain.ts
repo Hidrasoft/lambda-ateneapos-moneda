@@ -1,4 +1,4 @@
-import { SwaggerSuccessResponse, SwaggerErrorResponse } from '../../core/common/swaggerTypes';
+import { SwaggerSuccessResponse, SwaggerErrorResponse, SwaggerPaginatedResponse } from '../../core/common/swaggerTypes';
 
 // Modelo de dominio de Moneda (lo que se expone al cliente)
 export interface Moneda {
@@ -30,13 +30,19 @@ export type MonedaResponse = SwaggerSuccessResponse<Moneda>;
 // Respuesta para creación (POST) - 201
 export type MonedaCreatedResponse = SwaggerSuccessResponse<Moneda>;
 
-// Respuesta para listado (GET /monedas) con paginación
+// Data para listado (solo el arreglo de monedas)
 export interface MonedaListData {
   monedas: Moneda[];
+}
+
+// Resultado de BL con paginación separada
+export interface MonedaListResult {
+  data: MonedaListData;
   pagination: PaginationResponse;
 }
 
-export type MonedaListResponse = SwaggerSuccessResponse<MonedaListData>;
+// Respuesta para listado (GET /monedas) con paginación fuera de data
+export type MonedaListResponse = SwaggerPaginatedResponse<MonedaListData>;
 
 // Respuesta de error
 export type MonedaErrorResponse = SwaggerErrorResponse;

@@ -87,12 +87,14 @@ export class MonedaController implements IMonedaController {
   ): Promise<APIGatewayProxyResult> {
     try {
       // Llamar a la lógica de negocio con paginación
-      const data = await this.monedaBL.listMonedasPaginated(pagination);
+      const result = await this.monedaBL.listMonedasPaginated(pagination);
 
-      // Construir respuesta exitosa (200 OK)
-      const response = SwaggerResponseBuilder.buildSuccessResponse(
+      // Construir respuesta paginada (200 OK)
+      // result contiene { data: { monedas: [] }, pagination: {} }
+      const response = SwaggerResponseBuilder.buildPaginatedResponse(
         200,
-        data,
+        result.data,
+        result.pagination,
         messageUuid,
         requestAppId
       );

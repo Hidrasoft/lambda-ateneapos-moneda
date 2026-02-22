@@ -26,6 +26,19 @@ export interface SwaggerSuccessResponse<T> {
   data: T;
 }
 
+// Respuesta con paginación (paginación fuera de data)
+export interface SwaggerPaginatedResponse<T> {
+  headers: SwaggerResponseHeaders;
+  messageResponse: SwaggerMessageResponse;
+  data: T;
+  pagination: {
+    totalElement: number;
+    pageSize: number;
+    pageNumber: number;
+    hasMoreElements: boolean;
+  };
+}
+
 // Respuesta de error genérica
 export interface SwaggerErrorResponse {
   headers: SwaggerResponseHeaders;
